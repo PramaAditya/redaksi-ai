@@ -8,6 +8,7 @@ import {
   runPickerAgent,
   cosineSimilarity,
   clusterAndDeduplicateByEmbeddings,
+  uncensorText,
 } from '../../src/agents/editorial/picker.js';
 import { generateObject, embedMany } from 'ai';
 
@@ -195,5 +196,17 @@ describe('News Radar: Google News RSS Builder, XML Parser & AI Picker', () => {
     ]);
     // Second cluster has the grey-area warning
     expect(clusters[1].similarPastTopicWarning).toContain('KTT BRICS Pekan Lalu');
+  });
+
+  it('uncensors obfuscated bannedWords from historical posts before embedding & deduplication', () => {
+    const rules = [
+      { word: 'israel', replacement: '1srαǝl' },
+      { word: 'perang', replacement: 'pǝrαng' },
+      { word: 'houthi', replacement: 'Høuthı' },
+    ];
+    const raw = 'Donald Trump Setop Dana Tahunan Ke Rezim 1srαǝl Di Tengah Pǝrαng Lawan Høuthı';
+    expect(uncensorText(raw, rules)).toBe(
+      'Donald Trump Setop Dana Tahunan Ke Rezim israel Di Tengah perang Lawan houthi'
+    );
   });
 });

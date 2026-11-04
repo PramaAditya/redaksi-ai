@@ -54,6 +54,25 @@ export function cosineSimilarity(vecA: number[], vecB: number[]): number {
 }
 
 /**
+ * Reverses account bannedWords obfuscation (e.g. "1srαǝl" -> "israel", "pǝrαng" -> "perang")
+ * so historical post titles & captions match clean RSS headlines during embedding & LLM deduplication.
+ */
+export function uncensorText(
+  text: string,
+  bannedWords: { word: string; replacement: string }[] = []
+): string {
+  if (!text) return '';
+  let out = text;
+  for (const rule of bannedWords) {
+    if (rule.replacement && rule.replacement !== '***' && rule.word) {
+      const escaped = rule.replacement.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      out = out.replace(new RegExp(escaped, 'gi'), rule.word);
+    }
+  }
+  return out;
+}
+
+/**
  * Stage 2A (Vector Math):
  * 1. Drops candidates with cosine similarity >= hardDedupThreshold (0.92) against recent topics.
  * 2. Flags candidates in the grey area [greyAreaThreshold (0.78), 0.92) so the LLM can judge if it's a new development vs old rehash.
@@ -71,8 +90,8 @@ export function clusterAndDeduplicateByEmbeddings(
     maxArticlesPerCluster?: number;
   } = {}
 ): { clusters: CandidateStoryCluster[]; hardDroppedCount: number } {
-  const hardDedupThreshold = options.hardDedupThreshold ?? 0.92;
-  const greyAreaThreshold = options.greyAreaThreshold ?? 0.78;
+  const hardDedupThreshold = options.hardDedupThreshold ?? 0.88;
+  const greyAreaThreshold = options.greyAreaThreshold ?? 0.74;
   const clusterThreshold = options.clusterThreshold ?? 0.80;
   const maxArticlesPerCluster = options.maxArticlesPerCluster ?? 6;
 
@@ -403,19 +422,24 @@ export async function scanNewsForConnection(
   }
 
   // Stage 1: Fetch recent posts, jobs, and ideas for SQL pre-filtering & semantic deduplication
+  const bannedWords = Array.isArray((connection as Record<string, unknown>).bannedWords)
+    ? ((connection as Record<string, unknown>).bannedWords as { word: string; replacement: string }[])
+    : [];
+
+  // Stage 1: Fetch recent posts, jobs, and ideas for SQL pre-filtering & semantic deduplication
   const [recentQueue, recentJobs, recentIdeas] = await Promise.all([
     db
       .select({ text: queueTable.text, rawInput: queueTable.rawInput, templateData: queueTable.templateData })
       .from(queueTable)
-      .where(eq(queueTable.connectionId, connectionId))
+      .where(sql`${queueTable.connectionId} = ${connectionId} OR ${queueTable.connectionId} IS NULL`)
       .orderBy(desc(queueTable.createdAt))
-      .limit(30),
+      .limit(60),
     db
       .select({ text: jobsTable.text })
       .from(jobsTable)
       .where(eq(jobsTable.connectionId, connectionId))
       .orderBy(desc(jobsTable.createdAt))
-      .limit(20),
+      .limit(25),
     db
       .select({ text: ideasTable.text, metadata: ideasTable.metadata })
       .from(ideasTable)
@@ -424,24 +448,37 @@ export async function scanNewsForConnection(
       .limit(40),
   ]);
 
-  const existingTextBlob = [
-    ...recentQueue.map((q) => `${q.rawInput || ''} ${q.text || ''} ${(q.templateData as any)?.title || ''}`),
-    ...recentJobs.map((j) => j.text || ''),
-    ...recentIdeas.map((i) => `${i.text || ''} ${(i.metadata as any)?.headline || ''}`),
-  ]
-    .join('\n')
-    .toLowerCase();
+  const existingTextBlob = uncensorText(
+    [
+      ...recentQueue.map((q) => `${q.rawInput || ''} ${q.text || ''} ${(q.templateData as Record<string, unknown>)?.title || ''}`),
+      ...recentJobs.map((j) => j.text || ''),
+      ...recentIdeas.map((i) => `${i.text || ''} ${(i.metadata as Record<string, unknown>)?.headline || ''}`),
+    ].join('\n'),
+    bannedWords
+  ).toLowerCase();
 
   const recentTopicHeadlines: string[] = [];
   for (const q of recentQueue) {
-    const title = (q.templateData as any)?.title || q.text?.split('\n')[0];
-    if (title) recentTopicHeadlines.push(String(title).replace(/<[^>]+>|\*\*/g, '').trim());
+    const rawTitle = String((q.templateData as Record<string, unknown>)?.title || '').replace(/<[^>]+>|\*\*/g, '').trim();
+    const firstPara = String(q.text || '')
+      .split('\n')
+      .map((line) => line.replace(/<[^>]+>|\*\*/g, '').trim())
+      .find((line) => line.length > 25 && line.toLowerCase() !== rawTitle.toLowerCase()) || '';
+
+    const combinedTopic = rawTitle && firstPara
+      ? `${rawTitle} — ${firstPara.slice(0, 180)}`
+      : rawTitle || firstPara.slice(0, 180);
+
+    if (combinedTopic) {
+      recentTopicHeadlines.push(uncensorText(combinedTopic, bannedWords));
+    }
   }
   for (const i of recentIdeas) {
-    const headline = (i.metadata as any)?.headline || i.text?.split('\n')[0];
-    if (headline) recentTopicHeadlines.push(String(headline).trim());
+    const headline = String((i.metadata as Record<string, unknown>)?.headline || i.text?.split('\n')[0] || '').trim();
+    if (headline && !headline.startsWith('http')) {
+      recentTopicHeadlines.push(uncensorText(headline, bannedWords));
+    }
   }
-
   // Filter out exact title or link matches
   const prefilteredCandidates = uniqueBatchArticles.filter((art) => {
     const normTitle = art.title.toLowerCase().trim();
