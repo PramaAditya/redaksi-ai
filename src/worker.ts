@@ -13,7 +13,7 @@ import { getGlobalSettings, getConnections } from './db/settings.js';
 
 dns.setDefaultResultOrder('ipv4first');
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const globalSettings = await getGlobalSettings();
 const botToken = globalSettings.telegramBotToken;
@@ -22,7 +22,11 @@ if (!botToken) {
   process.exit(1);
 }
 
-const telegramApiRoot = process.env.TELEGRAM_API_URL || 'https://api.telegram.org';
+const rawTelegramApiUrl = process.env.TELEGRAM_API_URL;
+const telegramApiRoot =
+  rawTelegramApiUrl && !rawTelegramApiUrl.includes('ignews_botapi')
+    ? rawTelegramApiUrl
+    : 'https://api.telegram.org';
 
 const telegram = new Telegraf(botToken, {
   telegram: {

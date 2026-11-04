@@ -38,7 +38,7 @@ import fs from 'fs/promises';
 
 dns.setDefaultResultOrder('ipv4first');
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 startServer(PORT);
@@ -50,7 +50,11 @@ if (!botToken) {
   process.exit(1);
 }
 
-const telegramApiRoot = process.env.TELEGRAM_API_URL || 'https://api.telegram.org';
+const rawTelegramApiUrl = process.env.TELEGRAM_API_URL;
+const telegramApiRoot =
+  rawTelegramApiUrl && !rawTelegramApiUrl.includes('ignews_botapi')
+    ? rawTelegramApiUrl
+    : 'https://api.telegram.org';
 
 const bot = new Telegraf(botToken, {
   telegram: {
@@ -539,8 +543,7 @@ const startBotWithRetry = async (retries = 10, delayMs = 3000) => {
 };
 
 startBotWithRetry().catch(err => {
-  console.error('[Bot] Failed to start after multiple retries', err);
-  process.exit(1);
+  console.error('[Bot] Failed to start Telegram polling after multiple retries (Express Web API remains online):', err);
 });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));

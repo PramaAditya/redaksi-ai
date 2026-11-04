@@ -1,6 +1,8 @@
-import dotenv from 'dotenv';
-dotenv.config();
+// Redirect console.log to stderr so stdout remains 100% pure JSON-RPC 2.0 for MCP stdio
+console.log = (...args: unknown[]) => console.error(...args);
 
+import dotenv from 'dotenv';
+dotenv.config({ quiet: true });
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { REDAKSI_MCP_TOOLS, getDefaultClientConfig, type RedaksiClientConfig } from './mcp/tools.js';

@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import dotenv from 'dotenv';
 import seedData from '../config/banned-words.json' with { type: 'json' };
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 export async function getGlobalSettings() {
   const rows = await db.select().from(globalSettingsTable).where(eq(globalSettingsTable.id, 1));

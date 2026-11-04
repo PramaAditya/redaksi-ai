@@ -1,6 +1,6 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ quiet: true });
 
 for (const [key, val] of Object.entries(process.env)) {
   if (typeof val === 'string' && val.includes('${')) {
