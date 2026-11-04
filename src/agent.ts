@@ -4,6 +4,7 @@ import { runResearchPhase, processMediaOnly } from './agents/editorial/research.
 import { runOpinionPhase } from './agents/editorial/opinion.js';
 import type { MediaItem, PipelineContext, ResearchResult } from './utils.js';
 import { getBaseSystemPrompt, withRetry } from './utils.js';
+import { isStructuredSlideScript } from './agents/pipelines/image/aa.geopolitik/carousel_analysis.js';
 
 export async function runAutomatedPipeline(
   chatId: string,
@@ -50,8 +51,10 @@ export async function runAutomatedPipeline(
     // Phase 1: Editorial Research
     let researchResult: ResearchResult;
     
-    if (template.skipResearch) {
-      console.log(`[Pipeline] Skipping research phase for template ${templateId}`);
+    const isDirectScript = templateId === 'image:aa.geopolitik:carousel_analysis' && isStructuredSlideScript(userInput);
+
+    if (template.skipResearch || isDirectScript) {
+      console.log(`[Pipeline] Skipping research phase for template ${templateId}${isDirectScript ? ' (Structured Slide Script detected)' : ''}`);
       researchResult = await processMediaOnly(pipelineContext);
     } else {
       researchResult = await runResearchPhase(pipelineContext);
@@ -66,7 +69,7 @@ export async function runAutomatedPipeline(
     const requiresOpinion = template.requiredEditorialAgents?.includes('opinion') ||
       Boolean(template.slidesComposition && template.slidesComposition.opinion && template.slidesComposition.opinion > 0);
 
-    if (requiresOpinion && researchResult.researchText) {
+    if (!isDirectScript && requiresOpinion && researchResult.researchText) {
       console.log(`[Pipeline] Running opinion analysis agent for template ${templateId}`);
       const opinionText = await runOpinionPhase(pipelineContext, researchResult.researchText);
       if (opinionText) {

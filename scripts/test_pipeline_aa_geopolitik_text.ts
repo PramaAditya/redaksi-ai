@@ -7,14 +7,40 @@ for (const [key, val] of Object.entries(process.env)) {
   }
 }
 
-import { generateCarouselAnalysisContent } from '../src/agents/pipelines/image/aa.geopolitik/carousel_analysis.js';
+import { generateCarouselAnalysisContent, carouselAnalysisTemplateConfig } from '../src/agents/pipelines/image/aa.geopolitik/carousel_analysis.js';
 import { getBaseSystemPrompt, PipelineContext } from '../src/utils.js';
+import { insertQueueItem } from '../src/db/queue.js';
 
-const userInput = `Slide 1: Hook(Visual: Gambar siluet dua pemimpin negara bersalaman, dengan bayangan pion catur raksasa. Teks tebal & kontras)Teks: Kenapa di Politik Dunia, "Nggak Ada Teman yang Tulus"?Mari berkenalan dengan teori "Realisme" yang akan menampar kita dengan kerasnya realita!Slide 2: Analogi Kelas Tanpa GuruTeks: Coba bayangkan sebuah ruang kelas yang nggak punya guru sama sekali.Kira-kira apa yang terjadi? Pasti murid-muridnya bakal bikin aturan sendiri, muncul geng-gengan, dan siapa yang paling kuat, dialah yang akan berkuasa.Slide 3: Dunia Itu "Anarkis"Teks: Para penganut teori "Realisme" melihat dunia persis seperti kelas tanpa guru itu.Mereka beranggapan negara-negara hidup di dunia yang "anarkis" karena tidak ada pemerintahan dunia tertinggi yang benar-benar punya kuasa mutlak untuk membatasi pergerakan suatu negara.   Slide 4: Kepentingan Nasional adalah Nomor 1Teks: Karena tidak ada pengawas tertinggi, hukum rimba berlaku.Dalam bentuk realisme yang paling dasar, mengejar kepentingan sendiri (self-interest) dan memproyeksikan kekuatan/pengaruh adalah aturan main yang paling mutlak. Keselamatan negaramu bergantung pada dirimu sendiri.   Slide 5: Sebuah Kutipan Menohok (The Reality Check)Teks: Untuk memahami betapa "gelapnya" hukum rimba ini, coba resapi kutipan epik dari mantan Sekretaris Jenderal Hizbullah, Sayyed Hassan berikut ini.   Ini adalah cerminan murni bagaimana aktor politik melihat kerasnya dunia persaingan.Slide 6: "Dunia Tidak Menangisi yang Lemah"Teks: "Jika kamu lemah, dunia tidak akan mengakuimu, melindungimu, membelamu, atau meneteskan air mata untukmu."   "Satu-satunya hal yang melindungimu adalah kekuatanmu, keberanianmu, kepalan tanganmu, senjatamu, rudalmu, dan kehadiranmu di medan perang."   "Jika kamu kuat, kamu akan menguasai rasa hormat dari dunia."   Slide 7: Studi Kasus Nyata: Mengapa Dunia "Diam"?Teks: Mari kita pakai kacamata "Realisme" ini untuk membedah krisis saat ini: Mengapa AS terus mendukung Israel, dan mengapa dunia terkesan "diam" atau lambat merespons krisis kemanusiaan di Gaza?Slide 8: Moralitas vs Kepentingan StrategisTeks: Menurut teori realis, tindakan negara adidaya seringkali didasarkan pada kepentingan strategis nasional (seperti menjaga aliansi kuat dan basis pengaruh di Timur Tengah), bukan sekadar urusan moral atau kemanusiaan.   Di sisi lain, banyak negara lain terkesan pasif karena mereka memprioritaskan stabilitas ekonomi dan keamanan nasional mereka sendiri di atas krisis kemanusiaan. Dalam realisme: Kepentingan negara mengalahkan segalanya.Slide 9: Tapi, Apakah Harus Selalu Sekejam Ini?Teks: Pandangan super pesimis ini tentu banyak dikritik oleh ahli lainnya.Kritikus menilai realisme terlalu melebih-lebihkan konflik. Kenyataannya, negara-negara juga punya kapasitas untuk berdamai, membangun hukum internasional HAM, dan membuat organisasi seperti PBB. Hanya saja, implementasinya sering terbentur oleh kekuatan negara besar.`;
+const DEFAULT_SCRIPT = `Slide 1
+Headline: Pemilu AS Baru Saja Selesai. Kenapa Kita di Indonesia Harus Peduli? 🇺🇸🇮🇩
+Teks: Pemilu paruh waktu (Midterm Elections) di Amerika Serikat baru saja usai. Meski jaraknya belasan ribu kilometer dari Indonesia, hasil dari pergantian kekuasaan ini punya efek domino ke stabilitas ekonomi kita sampai ke arah perdamaian global. Mari kita bedah alasannya! ⬇️
+Slide 2
+Headline: Midterm Election Itu Apa Sih? 🤔
+Teks: Midterm bukan ajang memilih Presiden, melainkan pemilihan anggota Kongres (DPR dan Senat AS). Ibaratnya, Presiden boleh punya visi besar, tapi Kongres yang memegang "kunci brankas" negara. Siapa pun partai yang menguasai Kongres, mereka yang menentukan ke mana arah anggaran dan hukum AS mengalir selama dua tahun ke depan.
+Slide 3
+Headline: Ancaman Gridlock (Pemerintahan Mandek) 🛑
+Teks: Dalam politik AS, ada istilah Divided Government atau Gridlock. Ini terjadi kalau partai yang menguasai Kongres berbeda dengan partai Presiden. Efeknya? Kebijakan ekonomi dan luar negeri AS bakal jalan di tempat karena saling jegal. Kalau kebijakan AS tersendat dan lambat merespons krisis, pasar global biasanya ikut panik.
+Slide 4
+Headline: Efek Langsung ke Ekonomi Indonesia 💸
+Teks: Kongres AS punya kuasa penuh untuk mengatur batas utang negara dan pajak mereka. Kalau Kongres membuat kebijakan yang memicu gejolak pasar atau inflasi di AS, nilai tukar Dolar bisa meroket tajam. Ujung-ujungnya, Rupiah melemah, beban utang luar negeri bengkak, dan harga barang di Indonesia ikut naik.
+Slide 5
+Headline: Arah Kebijakan Luar Negeri AS 🌍
+Teks: Selain urusan domestik, Kongres juga yang mengetok palu untuk anggaran bantuan militer dan diplomasi luar negeri. Komposisi Kongres setelah Midterm ini menentukan apakah AS akan terus jor-joran mendanai isu keamanan global, atau justru menjadi lebih isolasionis dan hanya fokus mengurus masalah dalam negerinya sendiri.
+Slide 6
+Headline: Fakta Kebijakan Israel-Palestina & Faktor AIPAC 🇮🇱🇵🇸
+Teks: Banyak yang bertanya apakah hasil Midterm akan mengubah drastis kebijakan AS soal Palestina. Faktanya, kemungkinan besar tidak. Mayoritas politisi dari kedua partai (Demokrat dan Republik) memiliki hubungan erat dan mendapat dukungan kuat dari AIPAC (American Israel Public Affairs Committee). Dukungan terhadap Israel telah lama menjadi konsensus lintas partai di Kongres, sehingga siapa pun yang menang, kebijakan inti bantuan militer AS kemungkinan akan tetap sama.
+Slide 7
+Headline: Kesimpulan: Jauh di Mata, Terasa Dampaknya 🎯
+Teks: Apapun hasil akhir kursi mayoritas dari Midterm ini, dinamika politik di Kongres AS selalu menciptakan riak di panggung internasional. Perubahan arah politik mereka memaksa negara-negara berkembang seperti Indonesia untuk terus menyesuaikan strategi ekonomi dan diplomasi.
+Menurut kamu, kebijakan luar negeri AS mana yang belakangan ini paling terasa dampaknya? Drop pendapatmu di komen! 👇`;
+
+const userInput = process.env.INPUT_TEXT || DEFAULT_SCRIPT;
+const connectionId = parseInt(process.env.CONNECTION_ID || '5', 10);
+const shouldSaveToQueue = process.env.SAVE_TO_QUEUE === 'true';
 
 async function main() {
   console.log('='.repeat(78));
-  console.log('    TESTING AA.GEOPOLITIK CAROUSEL ANALYSIS (TEXT & PROMPTS ONLY)');
+  console.log('    TESTING AA.GEOPOLITIK CAROUSEL ANALYSIS (SCRIPT-TO-CAROUSEL MODE)');
   console.log('='.repeat(78));
 
   const currentDateObj = new Date();
@@ -28,47 +54,43 @@ async function main() {
   const baseSystemPrompt = getBaseSystemPrompt(currentDateStr, currentYear);
 
   const context: PipelineContext = {
-    chatId: 'test_chat',
-    messageId: 1,
+    chatId: 'OMP_EXTENSION',
+    messageId: Date.now(),
     userInput,
     uploadedMedia: [],
     telegram: null,
     statusMsg: null,
     settings: {
-      id: 5,
-      name: 'AA Geopolitik Test',
+      id: connectionId,
+      name: 'AA Geopolitik',
       editorialGuidelines: `Fokus pada analisis geopolitik realistis: kepentingan wilayah (teritori), sumber daya alam/energi, aliansi militer, rute dagang, dan kalkulasi strategis negara-negara.`,
       bannedWords: []
     },
     currentDateStr,
     currentYear,
     baseSystemPrompt,
-    connectionId: 5,
+    connectionId,
   };
 
-  const insights = {
-    research: `Materi edukasi mengenai Teori Realisme dalam Hubungan Internasional, konsep anarki internasional, sistem self-help, dan kutipan pidato Sayyed Hassan Nasrallah tentang kekuatan dan rasa hormat global dalam konteks krisis kemanusiaan di Gaza dan Timur Tengah.`
-  };
-
-  console.log('Generating content via generateCarouselAnalysisContent...\n');
-  const result = await generateCarouselAnalysisContent(context, insights);
+  console.log('Generating content via generateCarouselAnalysisContent (Script Mode)...\n');
+  const result = await generateCarouselAnalysisContent(context, {});
 
   console.log('='.repeat(78));
-  console.log('>>> [COVER SLIDE]');
+  console.log('>>> [COVER SLIDE (FROM SLIDE 1)]');
   console.log('='.repeat(78));
   console.log(`TITLE          : ${result.title}`);
   console.log(`SUBTITLE       : ${result.subtitle}`);
   console.log(`IMAGE PROMPT   : ${result.image_prompt}`);
 
   console.log('\n' + '='.repeat(78));
-  console.log('>>> [8 BODY SLIDES]');
+  console.log(`>>> [${result.slides.length} DYNAMIC BODY SLIDES]`);
   console.log('='.repeat(78));
 
   result.slides.forEach((slide, idx) => {
-    console.log(`\n--- SLIDE ${idx + 1} (${slide.type.toUpperCase()}) ---`);
+    console.log(`\n--- BODY SLIDE ${idx + 1} (${slide.type.toUpperCase()}) ---`);
     console.log(`TITLE       : ${slide.title}`);
     console.log(`TEXT        : \n${slide.text}`);
-    console.log(`IMAGE PROMPT: ${(slide as any).image_prompt || 'N/A'}`);
+    console.log(`IMAGE PROMPT: ${slide.image_prompt || 'N/A'}`);
   });
 
   console.log('\n' + '='.repeat(78));
@@ -78,6 +100,37 @@ async function main() {
   console.log(`Source URL  : ${result.source_url || 'N/A'}`);
   console.log('\nFinal Instagram Caption:\n');
   console.log(result.finalCaption);
+
+  if (shouldSaveToQueue) {
+    const templateData = {
+      title: result.title,
+      subtitle: result.subtitle,
+      image_prompt: result.image_prompt,
+      slides: result.slides.map(s => ({ ...s, slide_image: '' })),
+      source_name: result.source_name,
+      source_url: result.source_url,
+      coverImageUrl: '',
+      inputImages: []
+    };
+    const [inserted] = await insertQueueItem({
+      connectionId,
+      templateId: carouselAnalysisTemplateConfig.id,
+      templateData,
+      text: result.finalCaption,
+      media: [],
+      status: 'draft',
+      chatId: 'OMP_EXTENSION',
+      messageId: Date.now(),
+      researchResult: '',
+      agentInsights: {},
+      rawInput: userInput
+    });
+    const appUrl = (process.env.APP_URL || 'https://ignewsbot.rekapancatama.com').replace(/\/$/, '');
+    console.log('\n' + '='.repeat(78));
+    console.log(`>>> SAVED TO PRODUCTION QUEUE (ID: ${inserted.id})`);
+    console.log(`>>> Edit / Generate Images at: ${appUrl}/post/${inserted.id}`);
+    console.log('='.repeat(78));
+  }
 }
 
 main().catch(err => {

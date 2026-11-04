@@ -84,8 +84,7 @@
     />
 
     <div class="w-[1080px] h-[1042px] left-0 top-[308px] absolute cover-gradient"></div>
-
-    <div id="coverContent" class="w-[906px] h-[640px] left-[87px] bottom-[80px] absolute flex flex-col justify-end items-start gap-3.5">
+    <div id="coverContent" class="w-[906px] h-[680px] left-[87px] bottom-[80px] absolute flex flex-col justify-end items-start gap-3.5">
       <div class="self-stretch justify-end">
         <div id="coverTitle" class="cover-title">
           {{{title}}}
@@ -148,17 +147,16 @@
       const maxWidth = container.clientWidth;
       const totalHeight = container.clientHeight; // 640px
       const footerHeight = footer ? footer.offsetHeight + 14 : 50;
-
-      // 1. Fit subtitle first if present (max 2-3 lines, up to 160px) between [38px, 60px]
+      // 1. Fit subtitle first if present (up to 220px height) between [32px, 60px]
       let subtitleHeight = 0;
       if (subtitle) {
-        binarySearchFontSize(subtitle, maxWidth, 160, 38, 60, 1.1);
+        binarySearchFontSize(subtitle, maxWidth, 220, 32, 60, 1.12);
         subtitleHeight = subtitle.offsetHeight + 14;
       }
 
-      // 2. Fit title into remaining height (max 380px) between [76px, 136px]
-      const availableTitleHeight = Math.min(380, totalHeight - footerHeight - subtitleHeight);
-      binarySearchFontSize(title, maxWidth, availableTitleHeight, 76, 136, 0.94);
+      // 2. Fit title into remaining height (max 400px) between [72px, 136px]
+      const availableTitleHeight = Math.min(400, totalHeight - footerHeight - subtitleHeight);
+      binarySearchFontSize(title, maxWidth, availableTitleHeight, 72, 136, 0.94);
     }
 
     window.addEventListener('DOMContentLoaded', fitCoverText);

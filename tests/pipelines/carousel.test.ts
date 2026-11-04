@@ -19,6 +19,7 @@ import {
 import {
   carouselAnalysisTemplateConfig,
   generateCarouselAnalysisMedia,
+  isStructuredSlideScript,
 } from '../../src/agents/pipelines/image/aa.geopolitik/carousel_analysis.js';
 import * as media from '../../src/media.js';
 import * as queue from '../../src/db/queue.js';
@@ -581,6 +582,13 @@ describe('Carousel Pipelines Workflow Tests', () => {
 
       expect(result).toHaveLength(3);
       expect(result[0].url).toBe('https://renderer.pelita.tech/cover.png');
+    });
+
+    it('detects structured slide scripts accurately via isStructuredSlideScript', () => {
+      const scriptInput = `Slide 1\nHeadline: Pemilu AS Baru Saja Selesai\nTeks: Pemilu paruh waktu...\nSlide 2\nHeadline: Midterm Election Itu Apa Sih?\nTeks: Midterm bukan ajang memilih Presiden...`;
+      expect(isStructuredSlideScript(scriptInput)).toBe(true);
+      expect(isStructuredSlideScript('https://example.com/news-article')).toBe(false);
+      expect(isStructuredSlideScript('Analisis geopolitik Laut Merah dan Yaman')).toBe(false);
     });
   });
 });

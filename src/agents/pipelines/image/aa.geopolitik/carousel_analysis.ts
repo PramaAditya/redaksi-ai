@@ -9,6 +9,13 @@ import { marked } from 'marked';
 import { imageEditor, imageGenerator } from '../../../../utils/imageEditor/index.js';
 import { buildPromptContextFromInsights } from '../../../editorial/registry.js';
 
+export function isStructuredSlideScript(input: string): boolean {
+  if (!input) return false;
+  const hasMultipleSlides = /\bslide\s*1\b/i.test(input) && /\bslide\s*2\b/i.test(input);
+  const hasHeadlineTeksPattern = (input.match(/\b(headline|judul)\s*:/gi)?.length || 0) >= 2;
+  return hasMultipleSlides || hasHeadlineTeksPattern;
+}
+
 export const carouselAnalysisTemplateConfig = {
   id: 'image:aa.geopolitik:carousel_analysis',
   name: 'Carousel Analysis (AA Geopolitik)',
@@ -46,11 +53,12 @@ export const carouselAnalysisTemplateConfig = {
     },
     { name: 'source_name', type: 'string', label: 'Source Media Name' },
     { name: 'source_url', type: 'string', label: 'Source Article URL' },
+    { name: 'image_prompt', type: 'string', label: 'Cover AI Image Prompt (English)' },
     { name: 'coverImageUrl', type: 'image', label: 'Cover Image' },
     {
       name: 'slides',
       type: 'array',
-      label: 'Analysis Slides (8 Slides Story Arc)',
+      label: 'Analysis Slides (Dynamic Story Arc)',
       itemType: 'polymorphic',
       slideTypes: [
         {
@@ -71,6 +79,11 @@ export const carouselAnalysisTemplateConfig = {
               type: 'text',
               label: 'Analytical Paragraph (Alumni Sans, supports **bold**)',
               aiContext: 'Detailed geopolitical insight in accessible Bahasa Indonesia. Use **bold** on pivotal keywords and power verbs.'
+            },
+            {
+              name: 'image_prompt',
+              type: 'string',
+              label: 'Slide AI Image Prompt (English)'
             },
             {
               name: 'slide_image',
@@ -95,6 +108,11 @@ export const carouselAnalysisTemplateConfig = {
               name: 'text',
               type: 'text',
               label: 'Factual Paragraph (Alumni Sans, supports **bold**)'
+            },
+            {
+              name: 'image_prompt',
+              type: 'string',
+              label: 'Slide AI Image Prompt (English)'
             },
             {
               name: 'slide_image',
@@ -218,16 +236,20 @@ export async function runCarouselAnalysisPipeline(
   const { userInput, telegram, statusMsg, chatId, messageId, settings, candidateSources } = context;
   const bannedWords = settings?.bannedWords || [];
   const insights = agentInsights || { research: research.text };
+  const notifyStatus = async (text: string) => {
+    if (telegram && statusMsg?.chat?.id && statusMsg?.message_id) {
+      await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, text)).catch(() => {});
+    }
+  };
 
-  await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '✍️ Menulis analisis geopolitik...'));
+  await notifyStatus('✍️ Menulis analisis geopolitik...');
 
   // Phase 1: Content Synthesis
   console.log(`[Phase 1] Synthesizing Geopolitical Analysis via Gemini...`);
   const contentParams = await generateCarouselAnalysisContent(context, insights, candidateSources, research.primarySourceUrl);
 
   // Phase 2: Cover Visual Curation / Generation
-  await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '🎨 Menyiapkan visual cover...'));
-  let coverImageUrl = '';
+  await notifyStatus('🎨 Menyiapkan visual cover...');
 
   const isAlbum = context.mediaItems && context.mediaItems.length > 0;
   const imageMediaItems = isAlbum ? context.mediaItems.filter(item => item.type === 'image') : [];
@@ -271,7 +293,7 @@ export async function runCarouselAnalysisPipeline(
     }
   }
   // Phase 2.5: Auto Generate Contextual Images for Each Slide
-  await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '🖼️ Menghasilkan visual latar untuk setiap slide...'));
+  await notifyStatus('🖼️ Menghasilkan visual latar untuk setiap slide...');
   console.log(`[Phase 2.5] Generating atmospheric visual backgrounds for ${contentParams.slides.length} slides...`);
   
   const slideImages: string[] = [];
@@ -300,7 +322,7 @@ export async function runCarouselAnalysisPipeline(
 
 
   // Phase 3: Highlight Enhancement
-  await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '✨ Menambahkan highlight teks...'));
+  await notifyStatus('✨ Menambahkan highlight teks...');
   
   const highlightText = async (text: string) => {
     try {
@@ -320,7 +342,8 @@ RULES:
   };
 
   const enhancedSlides = await Promise.all(contentParams.slides.map(async (slide, idx) => {
-    const bolded = await highlightText(slide.text);
+    const alreadyHighlighted = slide.text.includes('**') || slide.text.includes('<strong>');
+    const bolded = alreadyHighlighted ? slide.text : await highlightText(slide.text);
     return {
       ...slide,
       text: censorText(bolded, bannedWords),
@@ -331,6 +354,7 @@ RULES:
   const templateData: any = {
     title: censorText(contentParams.title, bannedWords),
     subtitle: censorText(contentParams.subtitle, bannedWords),
+    image_prompt: contentParams.image_prompt,
     slides: enhancedSlides,
     source_name: contentParams.source_name,
     source_url: contentParams.source_url,
@@ -339,11 +363,11 @@ RULES:
   };
 
   // Phase 4: Media Rendering
-  await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '🖼️ Merender desain carousel...'));
+  await notifyStatus('🖼️ Merender desain carousel...');
   const renderedMedia = await generateCarouselAnalysisMedia(templateData, settings);
 
   // Phase 5: Queue Insertion
-  await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '🚀 Menyimpan ke Queue...'));
+  await notifyStatus('🚀 Menyimpan ke Queue...');
   const [inserted] = await insertQueueItem({
     connectionId: settings.id,
     templateId: carouselAnalysisTemplateConfig.id,
@@ -366,7 +390,7 @@ RULES:
     }
   };
 
-  if (renderedMedia.length > 0) {
+  if (telegram && chatId && renderedMedia.length > 0) {
     try {
       const response = await fetch(renderedMedia[0].url);
       if (response.ok) {
@@ -383,8 +407,11 @@ RULES:
     }
   }
 
-  await withRetry(() => telegram.deleteMessage(statusMsg.chat.id, statusMsg.message_id)).catch(() => {});
+  if (telegram && statusMsg?.chat?.id && statusMsg?.message_id) {
+    await withRetry(() => telegram.deleteMessage(statusMsg.chat.id, statusMsg.message_id)).catch(() => {});
+  }
   console.log(`[Done] Geopolitical Analysis Pipeline finished.`);
+  return inserted;
 }
 
 export async function generateCarouselAnalysisContent(
@@ -395,7 +422,7 @@ export async function generateCarouselAnalysisContent(
 ): Promise<{
   title: string;
   subtitle: string;
-  slides: { type: string; title?: string; text: string }[];
+  slides: { type: string; title?: string; text: string; image_prompt?: string }[];
   source_name: string;
   source_url?: string;
   image_prompt: string;
@@ -410,7 +437,31 @@ export async function generateCarouselAnalysisContent(
     ? `\n\nCRITICAL MODERATION RULE:\nReplace sensitive words with safe alternatives:\n${bannedWords.map((w: any) => `- Replace "${w.word}" with "${w.replacement}"`).join('\n')}`
     : '';
 
-  const dynamicSystemPromptAdditions = `
+  const isScriptMode = isStructuredSlideScript(userInput);
+
+  const scriptModePrompt = `
+You are a strict, zero-alteration formatter and visual prompt generator for an Instagram Carousel script.
+The user has provided a finished multi-slide script. DO NOT rewrite, formalize, or replace ANY of the user's words or sentences with synonyms!
+
+STRICT VERBATIM RULES:
+1. SLIDE 1 BECOMES THE COVER (` + '`title` & `subtitle`' + `):
+   - ` + '`title`' + `: Copy Slide 1's Headline WORD-FOR-WORD (in UPPERCASE). Remove emojis only. Wrap 1-3 key words in <strong>...</strong> for amber highlight.
+   - ` + '`subtitle`' + `: Copy Slide 1's Teks WORD-FOR-WORD. Remove emojis (like ⬇️) only. Do not change a single word!
+2. SLIDES 2..N BECOME BODY SLIDES (` + '`slides` array' + `):
+   - Map Slide 2, Slide 3, ... Slide N in exact 1-to-1 order into ` + '`slides`' + ` (unless a single slide is > 600 chars, in which case split that slide into 2 consecutive slides at a sentence boundary without changing any words).
+   - ` + '`slide.title`' + `: Copy that slide's Headline WORD-FOR-WORD (keep casual words like "Itu Apa Sih?", "Jauh di Mata, Terasa Dampaknya", etc. EXACTLY as written!). Remove emojis only, and wrap 1-2 key words in <strong>...</strong>.
+   - ` + '`slide.text`' + `: Copy that slide's Teks WORD-FOR-WORD, CHARACTER-FOR-CHARACTER!
+     * FORBIDDEN: NEVER replace casual words ("punya kuasa penuh", "Ujung-ujungnya", "bengkak", "jor-joran", "jalan di tempat", "ikut panik") with formal words!
+     * ALLOWED ONLY:
+       a) Add **bold** markdown around 20-30% of key phrases inside the existing words.
+       b) Insert a single "<br/>" between sentence groups so the slide has 2 clean paragraphs.
+       c) Remove emojis from the visual slide text.
+3. AUTOMATIC AI IMAGE PROMPTS:
+   - Generate a specific, atmospheric English ` + '`image_prompt`' + ` for the Cover and for EVERY slide in ` + '`slides`' + `.
+   - Style: dark editorial geopolitical photography, dramatic chiaroscuro lighting, concrete visual subjects matching that specific slide's topic. NO TEXT or words in the image prompt.
+`;
+
+  const dynamicSystemPromptAdditions = isScriptMode ? scriptModePrompt : `
 Your task is to craft an in-depth geopolitical analysis Instagram carousel with EXACTLY 1 COVER + 8 SLIDES.
 Adopt a pop-intellectual, engaging, and articulate Indonesian voice (Tier 2 Semi-Formal / Essayist style).
 
@@ -430,7 +481,7 @@ HOW TO STRUCTURE THE CAROUSEL:
 If the user's input already provides specific points, a raw draft, slide-by-slide text (e.g. "Slide 1: ... Slide 2: ..."), specific analogies (e.g. "ruang kelas tanpa guru", quotes, specific conflicts, or custom arguments):
 -> DO NOT force the default generic story arc below!
 -> STRICTLY prioritize and preserve the user's core ideas, analogies, quotes, and specific case studies.
--> Your job is simply to rewrite, polish, and format their specific thoughts into exactly 1 Cover + 8 Body Slides following the required styling (Bebas Neue uppercase titles with <strong>...</strong> amber highlights, 2 short paragraphs per slide separated by "<br/>", markdown **bold** highlights, and tailored visual image prompts).
+-> Your job is simply to rewrite, polish, and format their specific thoughts into Cover + Body Slides following the required styling (Bebas Neue uppercase titles with <strong>...</strong> amber highlights, 2 short paragraphs per slide separated by "<br/>", markdown **bold** highlights, and tailored visual image prompts).
 
 [RULE 2: AUTONOMOUS TOPIC-ONLY MODE]
 If the user only provides a general topic, headline, or URL without a slide-by-slide draft:
@@ -445,21 +496,23 @@ If the user only provides a general topic, headline, or URL without a slide-by-s
 `;
   const slideSchema = z.object({
     type: z.literal('opinion').default('opinion'),
-    title: z.string().describe('Slide heading in Bebas Neue. Bold words with <strong> for amber accent.'),
-    text: z.string().describe('Body paragraph in Alumni Sans (either 2 short paragraphs separated by <br/>, OR 1 direct quote block in quotes followed by 1 short commentary paragraph).'),
-    image_prompt: z.string().optional().describe('Atmospheric visual prompt for this slide background, e.g. "chess board on world map", "satellite orbital view of earth", "newsroom broadcast screens", "middle east borders map", "thinker silhouette". NO TEXT.')
+    title: z.string().describe('Slide heading in Bebas Neue (NO emojis). Bold key words with <strong> for amber accent.'),
+    text: z.string().describe('Body paragraph in Alumni Sans (2 paragraphs separated by <br/>, key phrases bolded with **keyword**).'),
+    image_prompt: z.string().describe('Atmospheric English visual prompt for this slide background, e.g. "US Capitol dome under dark moody storm clouds, editorial photography". NO TEXT.')
   });
 
   const schema = z.object({
-    title: z.string(),
-    subtitle: z.string(),
-    slides: z.array(slideSchema).length(8),
+    title: z.string().describe('Cover headline in Bebas Neue (NO emojis). Wrap key words in <strong>...</strong> for amber highlight.'),
+    subtitle: z.string().describe('Cover subtitle in Alumni Sans.'),
+    slides: isScriptMode ? z.array(slideSchema).min(1).max(16) : z.array(slideSchema).length(8),
     source_name: z.string(),
     source_url: z.string().optional(),
-    image_prompt: z.string()
+    image_prompt: z.string().describe('Atmospheric English visual prompt for the Cover background. NO TEXT.')
   });
 
-  const writerSystemPrompt = baseSystemPrompt + `\n\nEDITORIAL GUIDELINES & FRAMING:\n${editorialGuidelines}\n\n${dynamicSystemPromptAdditions}` + bannedWordsPrompt;
+  const writerSystemPrompt = isScriptMode
+    ? `${scriptModePrompt}${bannedWordsPrompt}`
+    : baseSystemPrompt + `\n\nEDITORIAL GUIDELINES & FRAMING:\n${editorialGuidelines}\n\n${dynamicSystemPromptAdditions}` + bannedWordsPrompt;
   const insightsPrompt = buildPromptContextFromInsights(insights);
 
   const { object: contentParams } = await generateObject({
@@ -469,11 +522,17 @@ If the user only provides a general topic, headline, or URL without a slide-by-s
     prompt: `Original User Input/Topic:\n${userInput}\n\nGathered Insights:\n${insightsPrompt || ''}${candidateSources && candidateSources.length > 0 ? '\n\nCandidate Source URLs:\n' + candidateSources.map((c: any) => `- ${c.title || c.domain || ''}: ${c.url}`).join('\n') : ''}`,
   });
 
-  let finalCaption = `${contentParams.title.replace(/<[^>]+>/g, '')}\n\n${contentParams.subtitle}\n\n` +
-    contentParams.slides.map((s, idx) => `[${idx + 1}] ${s.title.replace(/<[^>]+>/g, '')}\n${s.text}`).join('\n\n') +
+  const cleanForCaption = (str: string) =>
+    str
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .trim();
+
+  let finalCaption = `${cleanForCaption(contentParams.title)}\n\n${cleanForCaption(contentParams.subtitle)}\n\n` +
+    contentParams.slides.map((s, idx) => `[${idx + 1}] ${cleanForCaption(s.title)}\n${cleanForCaption(s.text)}`).join('\n\n') +
     `\n\n${currentDateStr}. Sumber: ${contentParams.source_name}`;
   finalCaption = censorText(finalCaption, bannedWords);
-
   return {
     title: contentParams.title,
     subtitle: contentParams.subtitle,

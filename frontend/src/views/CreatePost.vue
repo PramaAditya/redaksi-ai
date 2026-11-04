@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { PenTool, Loader2, RefreshCw } from 'lucide-vue-next'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { PenTool, Loader2, RefreshCw, Sparkles, Zap } from 'lucide-vue-next'
 import { getAuthHeaders } from '../auth'
 import ImageUploader from '../components/ImageUploader.vue'
 import { useConnectionStore } from '../store'
 
 const toast = useToast()
+const router = useRouter()
 const connectionStore = useConnectionStore()
 
 const tabItems = [
   { label: 'AI Generated', slot: 'ai', icon: 'i-lucide-sparkles' },
+  { label: 'Script to Carousel', slot: 'script', icon: 'i-lucide-layers' },
   { label: 'Manual Queue', slot: 'manual', icon: 'i-lucide-pen-tool' },
   { label: 'Batch Reels', slot: 'batch', icon: 'i-lucide-file-spreadsheet' }
 ]
@@ -23,6 +26,23 @@ const error = ref('')
 const activeJobs = ref<any[]>([])
 const uploaderRef = ref<InstanceType<typeof ImageUploader> | null>(null)
 let intervalId: any = null;
+
+// Script to Carousel State
+const scriptText = ref('')
+const scriptTemplateId = ref('image:aa.geopolitik:carousel_analysis')
+const scriptSubmitting = ref(false)
+const scriptSubmittingMode = ref<'draft' | 'worker' | null>(null)
+const scriptError = ref('')
+
+const detectedSlideCount = computed(() => {
+  const raw = scriptText.value.trim()
+  if (!raw) return 0
+  const slideMatches = raw.match(/\bslide\s*\d+\b/gi)
+  if (slideMatches && slideMatches.length >= 2) return slideMatches.length
+  const headlineMatches = raw.match(/\b(headline|judul)\s*:/gi)
+  if (headlineMatches && headlineMatches.length >= 2) return headlineMatches.length
+  return 0
+})
 
 // Manual Form State
 const manualType = ref('post')
@@ -254,6 +274,102 @@ const generateContent = async () => {
   }
 }
 
+const submitScriptDraft = async () => {
+  if (!scriptText.value.trim()) {
+    scriptError.value = 'Please paste your slide script first.'
+    return
+  }
+  if (!connectionStore.activeConnectionId) {
+    scriptError.value = 'Please select a connection first.'
+    return
+  }
+
+  scriptSubmitting.value = true
+  scriptSubmittingMode.value = 'draft'
+  scriptError.value = ''
+
+  try {
+    const res = await fetch('/api/queue/from-script', {
+      method: 'POST',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connectionId: connectionStore.activeConnectionId,
+        text: scriptText.value,
+        templateId: scriptTemplateId.value,
+        generateImages: false,
+        status: 'draft'
+      })
+    })
+    if (res.status === 401) {
+      toast.add({ title: 'Unauthorized', color: 'error' })
+      return
+    }
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to parse script')
+
+    toast.add({
+      title: 'Script Parsed!',
+      description: `Created Cover + ${data.slideCount} slides with AI image prompts.`,
+      color: 'success'
+    })
+    scriptText.value = ''
+    router.push(`/post/${data.item.id}`)
+  } catch (err: unknown) {
+    scriptError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    scriptSubmitting.value = false
+    scriptSubmittingMode.value = null
+  }
+}
+
+const submitScriptFullWorker = async () => {
+  if (!scriptText.value.trim()) {
+    scriptError.value = 'Please paste your slide script first.'
+    return
+  }
+  if (!connectionStore.activeConnectionId) {
+    scriptError.value = 'Please select a connection first.'
+    return
+  }
+
+  scriptSubmitting.value = true
+  scriptSubmittingMode.value = 'worker'
+  scriptError.value = ''
+
+  try {
+    const res = await fetch('/api/generate-content', {
+      method: 'POST',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connectionId: connectionStore.activeConnectionId,
+        text: scriptText.value,
+        mediaUrls: [],
+        templateId: scriptTemplateId.value
+      })
+    })
+    if (res.status === 401) {
+      toast.add({ title: 'Unauthorized', color: 'error' })
+      return
+    }
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to enqueue script job')
+
+    toast.add({
+      title: 'Full Carousel Job Enqueued!',
+      description: 'Worker is generating AI images and rendering your slides (research skipped).',
+      color: 'success'
+    })
+    scriptText.value = ''
+    activeTab.value = 'ai'
+    fetchActiveJobs()
+  } catch (err: unknown) {
+    scriptError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    scriptSubmitting.value = false
+    scriptSubmittingMode.value = null
+  }
+}
+
 const isVideo = (url: string) => {
   return url.match(/\.(mp4|mov|webm)$/i) !== null
 }
@@ -391,6 +507,71 @@ const submitManual = async () => {
                 <Loader2 v-if="submitting" class="w-5 h-5 mr-2 animate-spin" />
                 {{ submitting ? 'Submitting to Worker...' : 'Generate Carousel' }}
               </button>
+            </div>
+          </template>
+
+          <!-- Script to Carousel Tab -->
+          <template #script>
+            <div class="mt-6 space-y-6">
+              <div class="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-default space-y-1">
+                <p class="font-semibold text-amber-500">✨ Verbatim Script-to-Carousel Mode (Dynamic Slide Count)</p>
+                <p class="text-xs text-muted">
+                  Paste a structured draft (<code>Slide 1 ... Slide N</code>). <strong>Slide 1</strong> becomes the <strong>Cover (Title + Subtitle)</strong>, and <strong>Slides 2..N</strong> become body slides (supports any number of slides) with minimal text alteration and automatic AI background image prompts.
+                </p>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-default mb-2">Template</label>
+                <select 
+                  v-model="scriptTemplateId"
+                  class="w-full px-4 py-3 border border-default rounded-md shadow-sm focus:ring-primary focus:border-primary text-base bg-default text-default"
+                >
+                  <option v-for="t in availableTemplates" :key="t.id" :value="t.id">
+                    {{ t.name }}
+                  </option>
+                </select>
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="block text-sm font-medium text-default">Slide Script (Slide 1 = Cover, Slide 2..N = Body Slides) *</label>
+                  <span v-if="detectedSlideCount >= 2" class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/30">
+                    Detected {{ detectedSlideCount }} Slides (1 Cover + {{ detectedSlideCount - 1 }} Body Slides)
+                  </span>
+                </div>
+                <textarea 
+                  v-model="scriptText" 
+                  rows="12" 
+                  placeholder="Slide 1&#10;Headline: Pemilu AS Baru Saja Selesai. Kenapa Kita di Indonesia Harus Peduli?&#10;Teks: Pemilu paruh waktu (Midterm Elections) di Amerika Serikat baru saja usai...&#10;&#10;Slide 2&#10;Headline: Midterm Election Itu Apa Sih?&#10;Teks: Midterm bukan ajang memilih Presiden, melainkan pemilihan anggota Kongres..."
+                  class="w-full px-4 py-3 border border-default rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm font-mono bg-default text-default placeholder-muted"
+                ></textarea>
+              </div>
+
+              <UAlert v-if="scriptError" color="error" variant="soft" :description="scriptError" />
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button 
+                  type="button"
+                  @click="submitScriptDraft" 
+                  :disabled="scriptSubmitting || !scriptText.trim()"
+                  class="w-full flex justify-center items-center px-4 py-3 border border-default shadow-sm text-sm font-medium rounded-md text-default bg-default hover:bg-muted disabled:opacity-50 cursor-pointer transition"
+                >
+                  <Loader2 v-if="scriptSubmitting && scriptSubmittingMode === 'draft'" class="w-4 h-4 mr-2 animate-spin" />
+                  <Sparkles v-else class="w-4 h-4 mr-2 text-amber-500" />
+                  {{ scriptSubmitting && scriptSubmittingMode === 'draft' ? 'Parsing Script & Prompts...' : 'Fast Draft (Parse & Review Prompts ~5s)' }}
+                </button>
+
+                <button 
+                  type="button"
+                  @click="submitScriptFullWorker" 
+                  :disabled="scriptSubmitting || !scriptText.trim()"
+                  class="w-full flex justify-center items-center px-4 py-3 border border-transparent shadow-sm text-sm font-medium rounded-md text-inverted bg-primary hover:bg-primary disabled:opacity-50 cursor-pointer transition"
+                >
+                  <Loader2 v-if="scriptSubmitting && scriptSubmittingMode === 'worker'" class="w-4 h-4 mr-2 animate-spin" />
+                  <Zap v-else class="w-4 h-4 mr-2" />
+                  {{ scriptSubmitting && scriptSubmittingMode === 'worker' ? 'Enqueuing Worker...' : 'Full Auto (Generate Images & Render)' }}
+                </button>
+              </div>
             </div>
           </template>
 

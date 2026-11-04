@@ -18,6 +18,7 @@ const saving = ref(false)
 const generating = ref(false)
 const regeneratingType = ref<'media' | 'content' | 'pipeline' | null>(null)
 const error = ref('')
+const generatingImageKey = ref<string | null>(null)
 
 const FALLBACK_TEMPLATES = [
   {
@@ -96,6 +97,7 @@ const FALLBACK_TEMPLATES = [
       { name: 'subtitle', type: 'text', label: 'Cover Subtitle (Alumni Sans)' },
       { name: 'source_name', type: 'string', label: 'Source Media Name' },
       { name: 'source_url', type: 'string', label: 'Source Article URL' },
+      { name: 'image_prompt', type: 'string', label: 'Cover AI Image Prompt (English)' },
       { name: 'coverImageUrl', type: 'image', label: 'Cover Image' },
       {
         name: 'slides',
@@ -109,6 +111,7 @@ const FALLBACK_TEMPLATES = [
             fields: [
               { name: 'title', type: 'text', label: 'Slide Heading (Bebas Neue, **bold** = amber)' },
               { name: 'text', type: 'text', label: 'Analytical Paragraph (Alumni Sans)' },
+              { name: 'image_prompt', type: 'string', label: 'Slide AI Image Prompt (English)' },
               { name: 'slide_image', type: 'image', label: 'Slide Background Image (Optional)' }
             ]
           },
@@ -118,6 +121,7 @@ const FALLBACK_TEMPLATES = [
             fields: [
               { name: 'title', type: 'text', label: 'Slide Heading (Bebas Neue, **bold** = amber)' },
               { name: 'text', type: 'text', label: 'Factual Paragraph (Alumni Sans)' },
+              { name: 'image_prompt', type: 'string', label: 'Slide AI Image Prompt (English)' },
               { name: 'slide_image', type: 'image', label: 'Slide Background Image (Optional)' }
             ]
           },
@@ -506,6 +510,41 @@ const regenerateMedia = async () => {
   }
 }
 
+const generateAiImage = async (target: 'cover' | 'slide' | 'all', slideIndex?: number) => {
+  await saveChanges()
+  const key = target === 'slide' ? `slide-${slideIndex}` : target
+  generatingImageKey.value = key
+  try {
+    const prompt =
+      target === 'cover'
+        ? post.value.templateData?.image_prompt
+        : target === 'slide' && typeof slideIndex === 'number'
+          ? post.value.templateData?.slides?.[slideIndex]?.image_prompt
+          : undefined
+
+    const data = await apiFetch(`/api/queue/${postId}/generate-slide-image`, {
+      method: 'POST',
+      body: JSON.stringify({
+        target,
+        slideIndex,
+        prompt,
+        renderMedia: target === 'all'
+      })
+    })
+    post.value.templateData = data.templateData
+    if (data.media) post.value.media = data.media
+    toast.add({
+      title: target === 'all' ? 'All AI images generated & rendered!' : 'AI background image generated!',
+      color: 'success'
+    })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    toast.add({ title: message, color: 'error' })
+  } finally {
+    generatingImageKey.value = null
+  }
+}
+
 const regenerateContent = async () => {
   await saveChanges()
   generating.value = true
@@ -698,7 +737,19 @@ const regeneratePipeline = async () => {
             </template>
 
             <template v-else-if="field.type === 'image'">
-              <label class="block text-sm font-medium text-default mb-2">{{ field.label }}</label>
+              <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium text-default">{{ field.label }}</label>
+                <button
+                  v-if="field.name === 'coverImageUrl'"
+                  type="button"
+                  @click="generateAiImage('cover')"
+                  :disabled="generatingImageKey !== null"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded border border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 disabled:opacity-50 cursor-pointer transition"
+                >
+                  <Sparkles class="w-3.5 h-3.5" :class="{ 'animate-spin': generatingImageKey === 'cover' }" />
+                  {{ generatingImageKey === 'cover' ? 'Generating Cover...' : 'Generate AI Cover from Prompt' }}
+                </button>
+              </div>
               <ImageUploader 
                 v-model="post.templateData[field.name]" 
                 :isActivePasteTarget="activePasteTarget?.type === 'top'"
@@ -829,6 +880,16 @@ const regeneratePipeline = async () => {
                           />
                         </template>
                         <template v-else-if="subField.type === 'image'">
+                          <button
+                            v-if="subField.name === 'slide_image'"
+                            type="button"
+                            @click="generateAiImage('slide', Number(i))"
+                            :disabled="generatingImageKey !== null"
+                            class="mb-2 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded border border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 disabled:opacity-50 cursor-pointer transition"
+                          >
+                            <Sparkles class="w-3.5 h-3.5" :class="{ 'animate-spin': generatingImageKey === `slide-${i}` }" />
+                            {{ generatingImageKey === `slide-${i}` ? 'Generating AI Image...' : 'Generate AI Slide Image from Prompt' }}
+                          </button>
                           <ImageUploader 
                             v-model="post.templateData[field.name][i][subField.name]" 
                             :isActivePasteTarget="activePasteTarget?.type === 'slide' && activePasteTarget?.index === Number(i)"
