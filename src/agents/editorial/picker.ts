@@ -90,7 +90,6 @@ Anda DILARANG KERAS memilih artikel kandidat yang membahas peristiwa, insiden, a
 --- RIWAYAT TOPIK YANG SUDAH ADA (JANGAN DIULANG) ---
 ${recentListText}
 -----------------------------------------------------
-
 3. MULTI-SOURCE CLUSTERING:
 Jika ada 2-5 artikel kandidat dari media berbeda yang membahas peristiwa yang sama, gabungkan SEMUA URL mereka ke dalam properti \`links\` pada satu item cerita yang sama agar tim riset kami memiliki rujukan multi-sumber.`;
 
@@ -105,8 +104,7 @@ Jika ada 2-5 artikel kandidat dari media berbeda yang membahas peristiwa yang sa
 
   const modelName =
     process.env.PICKER_MODEL ||
-    process.env.MIDDLE_MODEL ||
-    process.env.CONTENT_WRITER_MODEL ||
+    process.env.LIGHT_MODEL ||
     'gemini-3-flash-preview';
 
   const { object } = await generateObject({
@@ -244,42 +242,46 @@ export async function scanNewsForConnection(
     maxStories
   );
 
-  // Stage 3: Resolve Google News redirect URLs in parallel for selected stories
+  // Stage 3: Resolve Google News redirect URLs in parallel across all selected stories
+  const resolvedStories = await Promise.all(
+    pickedStories.map(async (story, rankIdx) => {
+      const resolvedLinks = await mapWithConcurrency(story.links.slice(0, 4), SLIDE_CONCURRENCY, async (rawLink) => {
+        const decoded = await resolveGoogleNewsUrl(rawLink);
+        return sanitizeSourceUrl(decoded) || decoded;
+      });
+
+      const uniqueLinks = [...new Set(resolvedLinks.filter(Boolean))];
+      const sourcesMeta = uniqueLinks.map((url) => {
+        const matchingRaw = prefilteredCandidates.find((c) => c.link === url || story.links.includes(c.link));
+        return {
+          url,
+          domain: getCleanDomain(url) || matchingRaw?.source || 'news',
+          title: matchingRaw?.title,
+        };
+      });
+
+      const ideaText = `${story.title}\n\nSumber Rujukan:\n${uniqueLinks.join('\n')}`;
+      return { story, rankIdx, sourcesMeta, ideaText };
+    })
+  );
+
   const insertedIdeas = [];
-  for (let rankIdx = 0; rankIdx < pickedStories.length; rankIdx++) {
-    const story = pickedStories[rankIdx];
-    const resolvedLinks = await mapWithConcurrency(story.links.slice(0, 4), SLIDE_CONCURRENCY, async (rawLink) => {
-      const decoded = await resolveGoogleNewsUrl(rawLink);
-      return sanitizeSourceUrl(decoded) || decoded;
-    });
-
-    const uniqueLinks = [...new Set(resolvedLinks.filter(Boolean))];
-    const sourcesMeta = uniqueLinks.map((url) => {
-      const matchingRaw = prefilteredCandidates.find((c) => c.link === url || story.links.includes(c.link));
-      return {
-        url,
-        domain: getCleanDomain(url) || matchingRaw?.source || 'news',
-        title: matchingRaw?.title,
-      };
-    });
-
-    const ideaText = `${story.title}\n\nSumber Rujukan:\n${uniqueLinks.join('\n')}`;
-
+  for (const item of resolvedStories) {
     const [inserted] = await db
       .insert(ideasTable)
       .values({
         connectionId,
         chatId: 'NEWS_RADAR',
-        messageId: Date.now() + rankIdx,
-        text: ideaText,
+        messageId: Date.now() + item.rankIdx,
+        text: item.ideaText,
         media: [],
         status: 'pending',
         metadata: {
           sourceType: 'radar',
-          headline: story.title,
-          pitch: story.pitch,
-          sources: sourcesMeta,
-          rank: rankIdx + 1,
+          headline: item.story.title,
+          pitch: item.story.pitch,
+          sources: item.sourcesMeta,
+          rank: item.rankIdx + 1,
         },
       })
       .returning();
