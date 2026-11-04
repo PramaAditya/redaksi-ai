@@ -177,6 +177,10 @@ const updateStatus = async (ideaId: number, status: string) => {
       method: 'PUT',
       body: JSON.stringify({ status }),
     });
+    toast.add({
+      title: status === 'pending' ? 'Moved back to Pending Review!' : 'Idea moved to Rejected',
+      color: status === 'pending' ? 'success' : 'neutral',
+    });
     fetchIdeas();
   } catch (error) {
     console.error(`Failed to mark idea as ${status}:`, error);
@@ -443,15 +447,24 @@ const formatDate = (dateStr: string) => {
                 Restore
               </button>
 
-              <button
-                v-if="idea.status === 'converted'"
-                type="button"
-                @click="router.push('/')"
-                class="w-full inline-flex justify-center items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 cursor-pointer"
-              >
-                <CheckCircle2 class="w-3.5 h-3.5" />
-                Converted — View in Queue Dashboard &rarr;
-              </button>
+              <template v-if="idea.status === 'converted'">
+                <button
+                  type="button"
+                  @click="router.push('/')"
+                  class="flex-1 inline-flex justify-center items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 hover:bg-emerald-500/20 cursor-pointer transition"
+                >
+                  <CheckCircle2 class="w-3.5 h-3.5" />
+                  View in Queue &rarr;
+                </button>
+                <button
+                  type="button"
+                  @click="updateStatus(idea.id, 'pending')"
+                  class="inline-flex justify-center items-center gap-1.5 px-3 py-2 border border-default text-xs font-medium rounded-lg text-default bg-default hover:bg-muted cursor-pointer transition"
+                >
+                  <RotateCcw class="w-3.5 h-3.5" />
+                  Move to Pending Review
+                </button>
+              </template>
             </div>
           </div>
         </div>

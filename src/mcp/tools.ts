@@ -436,10 +436,10 @@ export const REDAKSI_MCP_TOOLS: RedaksiToolDefinition<any>[] = [
     name: 'redaksi_manage_idea',
     label: 'Redaksi.AI: Manage Idea (Create / Convert / Reject)',
     description:
-      'Create a new story idea, convert an existing idea into an active Carousel generation job (with templateId and heroStyle), or mark an idea as rejected/pending/deleted.',
+      'Create a new story idea, convert an existing idea into an active Carousel generation job (with templateId and heroStyle), move a converted/rejected idea back to pending review (restore / move_to_pending), or mark an idea as rejected/deleted.',
     schema: z.object({
-      action: z.enum(['create', 'convert', 'reject', 'restore', 'delete']),
-      ideaId: z.number().optional().describe('Required for convert, reject, restore, or delete.'),
+      action: z.enum(['create', 'convert', 'reject', 'restore', 'move_to_pending', 'delete']),
+      ideaId: z.number().optional().describe('Required for convert, reject, restore, move_to_pending, or delete.'),
       connectionId: z.number().optional().describe('Required when action="create".'),
       text: z.string().optional().describe('Idea text, topic, or URLs when action="create".'),
       templateId: z
