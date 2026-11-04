@@ -1,33 +1,15 @@
 version: '3.8'
 
-volumes:
-  telegram-data:
-
 services:
-  ignews_botapi:
-    image: aiogram/telegram-bot-api:latest
-    container_name: ignews_botapi
-    env_file:
-      - .env
-    # Removed host port mapping "8081:8081" to prevent conflict with your other project's API server.
-    # The internal containers (bot and worker) can still access it on port 8081 via the Docker network.
-    volumes:
-      - telegram-data:/var/lib/telegram-bot-api
-    restart: unless-stopped
-
   bot:
     build: .
     container_name: ignews_bot
     restart: always
     env_file: .env
     command: npm run start:bot
-    volumes:
-      - telegram-data:/var/lib/telegram-bot-api
     depends_on:
-      - ignews_botapi
       - media-renderer
-      - subtitle-maker
-    
+
   media-renderer:
     build: ./services/media-renderer
     container_name: ignews_media_renderer
@@ -36,23 +18,11 @@ services:
     expose:
       - "3000"
 
-  subtitle-maker:
-    build: ./services/subtitle-maker
-    container_name: ignews_subtitle_maker
-    restart: always
-    env_file: .env
-    expose:
-      - "3001"
-
   worker:
     build: .
     container_name: ignews_worker
     restart: always
     env_file: .env
     command: npm run start:worker
-    volumes:
-      - telegram-data:/var/lib/telegram-bot-api
     depends_on:
-      - ignews_botapi
       - media-renderer
-      - subtitle-maker

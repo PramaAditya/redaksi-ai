@@ -11,6 +11,8 @@ type GetContentsOptions = unknown;
 class ExaService {
   private keys: string[];
   private currentKeyIndex: number = 0;
+  private cooldownUntil: Map<number, number> = new Map();
+  private readonly cooldownMs: number = 60_000;
   private app: Exa;
 
   constructor() {
@@ -29,14 +31,30 @@ class ExaService {
     this.app = new Exa(this.keys[this.currentKeyIndex] || "");
   }
 
-  private rotateKey(): boolean {
-    if (this.currentKeyIndex < this.keys.length - 1) {
-      this.currentKeyIndex++;
-      console.log(
-        `[ExaService] Rotating to API key index ${this.currentKeyIndex}`,
-      );
-      this.app = new Exa(this.keys[this.currentKeyIndex] || "");
+  private rotateKey(failedKeyIndex: number = this.currentKeyIndex): boolean {
+    if (this.keys.length <= 1) return false;
+
+    const now = Date.now();
+    this.cooldownUntil.set(failedKeyIndex, now + this.cooldownMs);
+
+    // If another concurrent request already rotated away from failedKeyIndex to a healthy key, reuse it
+    if (
+      this.currentKeyIndex !== failedKeyIndex &&
+      (this.cooldownUntil.get(this.currentKeyIndex) || 0) <= now
+    ) {
       return true;
+    }
+
+    for (let offset = 1; offset <= this.keys.length; offset++) {
+      const candidate = (failedKeyIndex + offset) % this.keys.length;
+      if (candidate !== failedKeyIndex && (this.cooldownUntil.get(candidate) || 0) <= now) {
+        this.currentKeyIndex = candidate;
+        console.log(
+          `[ExaService] Rotating to API key index ${this.currentKeyIndex}`,
+        );
+        this.app = new Exa(this.keys[this.currentKeyIndex] || "");
+        return true;
+      }
     }
     return false;
   }
@@ -74,6 +92,7 @@ class ExaService {
     query: string,
     options?: RegularSearchOptions,
   ): Promise<unknown> {
+    const keyIndexAtStart = this.currentKeyIndex;
     try {
       const fn = this.app.search as unknown as (
         q: string,
@@ -84,10 +103,10 @@ class ExaService {
       if (this.isCreditOrQuotaError(error)) {
         const status = this.getErrorStatus(error);
         console.warn(
-          `[ExaService] Search failed with status ${String(status)}. Key index: ${this.currentKeyIndex}`,
+          `[ExaService] Search failed with status ${String(status)}. Key index: ${keyIndexAtStart}`,
         );
 
-        if (this.rotateKey()) {
+        if (this.rotateKey(keyIndexAtStart)) {
           console.log(`[ExaService] Retrying search with new key...`);
           return this.search(query, options);
         } else {
@@ -103,6 +122,7 @@ class ExaService {
     urls: string | string[],
     options?: GetContentsOptions,
   ): Promise<unknown> {
+    const keyIndexAtStart = this.currentKeyIndex;
     try {
       const fn = this.app.getContents as unknown as (
         u: string | string[],
@@ -113,10 +133,10 @@ class ExaService {
       if (this.isCreditOrQuotaError(error)) {
         const status = this.getErrorStatus(error);
         console.warn(
-          `[ExaService] getContents failed with status ${String(status)}. Key index: ${this.currentKeyIndex}`,
+          `[ExaService] getContents failed with status ${String(status)}. Key index: ${keyIndexAtStart}`,
         );
 
-        if (this.rotateKey()) {
+        if (this.rotateKey(keyIndexAtStart)) {
           console.log(`[ExaService] Retrying getContents with new key...`);
           return this.getContents(urls, options);
         } else {
@@ -132,6 +152,7 @@ class ExaService {
     url: string,
     options?: FindSimilarOptions,
   ): Promise<unknown> {
+    const keyIndexAtStart = this.currentKeyIndex;
     try {
       const fn = this.app.findSimilar as unknown as (
         u: string,
@@ -142,10 +163,10 @@ class ExaService {
       if (this.isCreditOrQuotaError(error)) {
         const status = this.getErrorStatus(error);
         console.warn(
-          `[ExaService] findSimilar failed with status ${String(status)}. Key index: ${this.currentKeyIndex}`,
+          `[ExaService] findSimilar failed with status ${String(status)}. Key index: ${keyIndexAtStart}`,
         );
 
-        if (this.rotateKey()) {
+        if (this.rotateKey(keyIndexAtStart)) {
           console.log(`[ExaService] Retrying findSimilar with new key...`);
           return this.findSimilar(url, options);
         } else {
@@ -161,6 +182,7 @@ class ExaService {
     query: string,
     options?: AnswerOptions,
   ): Promise<unknown> {
+    const keyIndexAtStart = this.currentKeyIndex;
     try {
       const fn = this.app.answer as unknown as (
         q: string,
@@ -171,10 +193,10 @@ class ExaService {
       if (this.isCreditOrQuotaError(error)) {
         const status = this.getErrorStatus(error);
         console.warn(
-          `[ExaService] answer failed with status ${String(status)}. Key index: ${this.currentKeyIndex}`,
+          `[ExaService] answer failed with status ${String(status)}. Key index: ${keyIndexAtStart}`,
         );
 
-        if (this.rotateKey()) {
+        if (this.rotateKey(keyIndexAtStart)) {
           console.log(`[ExaService] Retrying answer with new key...`);
           return this.answer(query, options);
         } else {

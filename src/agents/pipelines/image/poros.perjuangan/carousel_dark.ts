@@ -135,7 +135,7 @@ const schema = z.object({
   image_prompt: z.string(),
 });
 
-export async function generateCarouselDarkMedia(templateData: any, settings: any): Promise<{ type: 'image' | 'video', url: string }[]> {
+export async function generateCarouselDarkMedia(templateData: any, settings: any): Promise<{ type: 'image', url: string }[]> {
   const pages: any[] = [];
   
   pages.push({
@@ -300,12 +300,13 @@ Your task is to parse the gathered facts into final components for an Instagram 
   let extraImageUrls: string[] = [];
   if (isAlbum && carouselDarkTemplateConfig.albumStrategy === 'all_as_slides') {
     console.log(`[Phase 3] Uploading raw input images for album...`);
-    for (const item of imageMediaItems) {
-      if (item.buffer) {
-         const url = await uploadToS3(item.buffer, item.mimeType || 'image/jpeg', item.mimeType === 'image/png' ? '.png' : '.jpg');
-         if (url) extraImageUrls.push(url);
-      }
-    }
+    const uploadedUrls = await Promise.all(
+      imageMediaItems.map(async (item) => {
+        if (!item.buffer) return null;
+        return uploadToS3(item.buffer, item.mimeType || 'image/jpeg', item.mimeType === 'image/png' ? '.png' : '.jpg');
+      })
+    );
+    extraImageUrls = uploadedUrls.filter((u): u is string => Boolean(u));
   }
 
   await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '🎨 Merender desain post...'));
@@ -435,7 +436,7 @@ RULES:
   // Phase 5: Publishing via Queue
   console.log(`[Phase 5] Saving to Queue and preparing Buffer URLs`);
   
-  let allPublishUrls: { type: 'image' | 'video', url: string }[] = renderedUrls.map(url => ({
+  let allPublishUrls: { type: 'image', url: string }[] = renderedUrls.map(url => ({
     type: 'image',
     url
   }));

@@ -33,6 +33,7 @@ const handlePaste = async (e: ClipboardEvent) => {
       const file = items[i].getAsFile()
       if (file) {
         e.preventDefault()
+        e.stopPropagation()
         await uploadFile(file)
         break
       }
@@ -45,7 +46,7 @@ const handleDrop = async (e: DragEvent) => {
   const files = e.dataTransfer?.files
   if (!files || files.length === 0) return
   for (let i = 0; i < files.length; i++) {
-    if (files[i].type.startsWith('image/') || files[i].type.startsWith('video/')) {
+    if (files[i].type.startsWith('image/')) {
       await uploadFile(files[i])
       if (!props.multiple) break
     }
@@ -120,9 +121,6 @@ const removeMedia = (index: number) => {
   }
 }
 
-const isVideo = (url: string) => {
-  return url.match(/\.(mp4|mov|webm)$/i)
-}
 </script>
 
 <template>
@@ -147,15 +145,14 @@ const isVideo = (url: string) => {
       type="file" 
       ref="fileInput" 
       class="hidden" 
-      accept="image/*,video/*" 
+      accept="image/*" 
       :multiple="props.multiple"
       @change="handleFileUpload" 
     />
     
     <!-- Single Media: Full width on mobile, clean responsive display -->
     <div v-if="hasMedia && !props.multiple" class="relative group w-full rounded-md overflow-hidden bg-default">
-      <video v-if="isVideo(mediaList[0])" :src="mediaList[0]" class="w-full max-h-72 object-contain sm:object-cover mx-auto" muted autoplay loop></video>
-      <img v-else :src="mediaList[0]" class="w-full max-h-72 object-contain sm:object-cover mx-auto" />
+      <img :src="mediaList[0]" class="w-full max-h-72 object-contain sm:object-cover mx-auto" />
       <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2 p-4">
         <div class="flex items-center gap-2">
           <button type="button" @click.stop="triggerUpload" class="px-3 py-1.5 bg-primary text-inverted text-xs font-medium rounded-md hover:bg-primary/90 transition flex items-center gap-1.5 cursor-pointer shadow">
@@ -172,8 +169,7 @@ const isVideo = (url: string) => {
     <!-- Multiple Media Grid -->
     <div v-else-if="hasMedia && props.multiple" class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
       <div v-for="(url, index) in mediaList" :key="index" class="relative group aspect-square rounded overflow-hidden shadow-sm bg-default">
-        <video v-if="isVideo(url)" :src="url" class="w-full h-full object-cover" muted autoplay loop></video>
-        <img v-else :src="url" class="w-full h-full object-cover" />
+        <img :src="url" class="w-full h-full object-cover" />
         <div class="absolute inset-0 bg-inverted bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
           <button type="button" @click.stop="removeMedia(index)" class="p-2 bg-error text-inverted rounded-full hover:bg-error cursor-pointer">
             <X class="w-5 h-5" />
@@ -192,7 +188,7 @@ const isVideo = (url: string) => {
     <div v-else-if="!hasMedia || props.multiple" class="py-6 cursor-pointer" @click="triggerUpload">
       <UploadCloud class="w-10 h-10 text-muted mx-auto mb-2" />
       <p class="text-sm text-muted">Click to upload media or press <kbd class="px-1.5 py-0.5 text-xs bg-default border border-default rounded shadow-xs font-mono">Ctrl+V</kbd> to paste</p>
-      <p class="text-xs text-muted mt-1">Accepts {{ props.multiple ? 'multiple' : 'single' }} image(s) & video(s) (JPG, PNG, MP4)</p>
+      <p class="text-xs text-muted mt-1">Accepts {{ props.multiple ? 'multiple' : 'single' }} image(s) (JPG, PNG, WebP)</p>
     </div>
     <div v-if="error" class="mt-2 text-sm text-error">
       {{ error }}

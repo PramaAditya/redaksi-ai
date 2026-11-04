@@ -77,19 +77,8 @@ export async function processMediaOnly(
         let buffer = Buffer.from(response!.data);
         media.buffer = buffer;
 
-        if (media.type === "video") {
-          console.log(`[Phase 1 Skip] Uploading video to S3...`);
-          const s3Url = await uploadToS3(
-            buffer,
-            media.mimeType || "video/mp4",
-            ".mp4",
-          );
-          media.s3Url = s3Url;
-          console.log(`[Phase 1 Skip] S3 URL: ${s3Url}`);
-        } else {
-          console.log(`[Phase 1 Skip] Uploading image to S3...`);
-          media.s3Url = await uploadToS3(buffer, "image/jpeg", ".jpg");
-        }
+        console.log(`[Phase 1 Skip] Uploading image to S3...`);
+        media.s3Url = await uploadToS3(buffer, "image/jpeg", ".jpg");
       } catch (err: any) {
         console.error(`[Phase 1 Skip] Failed to process media:`, err.message);
       }
@@ -159,55 +148,30 @@ export async function runResearchPhase(
 
         let buffer = Buffer.from(response!.data);
 
-        if (media.type === "video") {
-          console.log(`[Phase 1] Saving original video...`);
-          media.buffer = buffer;
+        console.log(`[Phase 1] Saving original image...`);
+        media.buffer = buffer;
 
-          console.log(`[Phase 1] Uploading video to S3...`);
-          const s3Url = await uploadToS3(
-            buffer,
-            media.mimeType || "video/mp4",
-            ".mp4",
-          );
-          media.s3Url = s3Url;
-          console.log(`[Phase 1] S3 URL: ${s3Url}`);
+        console.log(`[Phase 1] Uploading image to S3...`);
+        media.s3Url = await uploadToS3(buffer, "image/jpeg", ".jpg");
 
-          messageContent.push({
-            type: "file",
-            data: s3Url,
-            mediaType: media.mimeType || "video/mp4",
-          });
-        } else {
-          console.log(`[Phase 1] Saving original image...`);
-          media.buffer = buffer;
-
-          console.log(`[Phase 1] Uploading image to S3...`);
-          media.s3Url = await uploadToS3(buffer, "image/jpeg", ".jpg");
-
-          messageContent.push({
-            type: "image",
-            image: buffer,
-          });
-        }
+        messageContent.push({
+          type: "image",
+          image: buffer,
+        });
       } catch (err: any) {
         console.error(`[Phase 1] Failed to process media:`, err.message);
       }
     }
   }
 
-  let scrapedImageUrl: string | null = null;
-  let scrapedImageUrls: string[] = [];
-  const candidateSources: CandidateSource[] = [];
-
   const inputUrls = extractUrlsFromText(userInput);
   let primarySourceUrl: string | null =
     inputUrls.length > 0 ? sanitizeSourceUrl(inputUrls[0]) : null;
-  if (primarySourceUrl) {
-    candidateSources.push({
-      url: primarySourceUrl,
-      domain: getCleanDomain(primarySourceUrl),
-    });
-  }
+
+  let scrapedImageUrl: string | null = null;
+  let scrapedImageUrls: string[] = [];
+  let candidateSources: CandidateSource[] = [];
+
   const extractImagesFromMarkdown = (md: string) => {
     const regex = /!\[.*?\]\((.*?)\)/g;
     let match;
@@ -225,6 +189,14 @@ export async function runResearchPhase(
   let fallbackMarkdown = "";
 
   while (attempt < maxRetries) {
+    // Reset per-attempt accumulators so failed retries do not contaminate subsequent attempts
+    scrapedImageUrl = null;
+    scrapedImageUrls = [];
+    fallbackMarkdown = "";
+    candidateSources = primarySourceUrl
+      ? [{ url: primarySourceUrl, domain: getCleanDomain(primarySourceUrl) }]
+      : [];
+
     try {
       attempt++;
       console.log(`[Phase 1] Research AI generation attempt ${attempt}...`);
@@ -289,45 +261,50 @@ export async function runResearchPhase(
               }
 
               // Fallback to Firecrawl
-              const res = await firecrawlService.search(query, {
-                limit: 3,
-                scrapeOptions: { formats: ["markdown"] },
-              });
+              try {
+                const res = await firecrawlService.search(query, {
+                  limit: 3,
+                  scrapeOptions: { formats: ["markdown"] },
+                });
 
-              if (
-                res &&
-                typeof res === "object" &&
-                "data" in res &&
-                Array.isArray((res as Record<string, unknown>).data)
-              ) {
-                ((res as Record<string, unknown>).data as unknown[]).forEach(
-                  (item: unknown) => {
-                    if (item && typeof item === "object") {
-                      const typedItem = item as Record<string, unknown>;
-                      if (typedItem.url && typeof typedItem.url === "string" && typedItem.url.startsWith("http")) {
-                        const clean = sanitizeSourceUrl(typedItem.url);
-                        if (clean && !candidateSources.some((c) => c.url === clean)) {
-                          candidateSources.push({
-                            url: clean,
-                            title: typeof typedItem.title === "string" ? typedItem.title : undefined,
-                            domain: getCleanDomain(clean),
-                          });
+                if (
+                  res &&
+                  typeof res === "object" &&
+                  "data" in res &&
+                  Array.isArray((res as Record<string, unknown>).data)
+                ) {
+                  ((res as Record<string, unknown>).data as unknown[]).forEach(
+                    (item: unknown) => {
+                      if (item && typeof item === "object") {
+                        const typedItem = item as Record<string, unknown>;
+                        if (typedItem.url && typeof typedItem.url === "string" && typedItem.url.startsWith("http")) {
+                          const clean = sanitizeSourceUrl(typedItem.url);
+                          if (clean && !candidateSources.some((c) => c.url === clean)) {
+                            candidateSources.push({
+                              url: clean,
+                              title: typeof typedItem.title === "string" ? typedItem.title : undefined,
+                              domain: getCleanDomain(clean),
+                            });
+                          }
+                        }
+                        const metadata = typedItem.metadata as
+                          | Record<string, unknown>
+                          | undefined;
+                        if (metadata && (metadata.ogImage || metadata.image)) {
+                          const img = metadata.ogImage || metadata.image;
+                          if (typeof img === "string" && img.startsWith("http")) {
+                            scrapedImageUrls.push(img);
+                          }
                         }
                       }
-                      const metadata = typedItem.metadata as
-                        | Record<string, unknown>
-                        | undefined;
-                      if (metadata && (metadata.ogImage || metadata.image)) {
-                        const img = metadata.ogImage || metadata.image;
-                        if (typeof img === "string" && img.startsWith("http")) {
-                          scrapedImageUrls.push(img);
-                        }
-                      }
-                    }
-                  },
-                );
+                    },
+                  );
+                }
+                return JSON.stringify(res ?? []);
+              } catch (fcErr) {
+                console.warn(`[Tool: searchWeb] Firecrawl fallback also failed:`, fcErr);
+                return JSON.stringify([]);
               }
-              return JSON.stringify(res);
             },
           }),
           scrapeUrl: tool({
@@ -362,10 +339,12 @@ export async function runResearchPhase(
                     typeof firstResult.image === "string" &&
                     firstResult.image.startsWith("http")
                   ) {
-                    scrapedImageUrl = firstResult.image;
+                    if (!scrapedImageUrl || cleanScraped === primarySourceUrl) {
+                      scrapedImageUrl = firstResult.image;
+                    }
                     scrapedImageUrls.push(firstResult.image);
                     console.log(
-                      `[Tool: scrapeUrl] Found image URL in Exa metadata: ${scrapedImageUrl}`,
+                      `[Tool: scrapeUrl] Found image URL in Exa metadata: ${firstResult.image}`,
                     );
                   }
                   if (markdown) {
@@ -395,13 +374,15 @@ export async function runResearchPhase(
               if (metadata && (metadata.ogImage || metadata.image)) {
                 const img = metadata.ogImage || metadata.image;
                 if (typeof img === "string") {
-                  scrapedImageUrl = img;
-                  if (scrapedImageUrl.startsWith("http")) {
-                    scrapedImageUrls.push(scrapedImageUrl);
+                  if (!scrapedImageUrl || cleanScraped === primarySourceUrl) {
+                    scrapedImageUrl = img;
+                  }
+                  if (img.startsWith("http")) {
+                    scrapedImageUrls.push(img);
                   }
                 }
                 console.log(
-                  `[Tool: scrapeUrl] Found image URL in metadata: ${scrapedImageUrl}`,
+                  `[Tool: scrapeUrl] Found image URL in metadata: ${img}`,
                 );
               }
 
@@ -409,7 +390,7 @@ export async function runResearchPhase(
                 fallbackMarkdown += `\n\n--- Content from ${url} ---\n${markdown}`;
               }
 
-              return markdown || JSON.stringify(res);
+              return markdown || JSON.stringify(res ?? {});
             },
           }),
         },

@@ -42,6 +42,7 @@ export interface ImageGeneratorResult {
   base64?: string;
   url?: string;
   mediaType: string;
+  isFallback?: boolean;
 }
 
 export const DRAMATIC_STYLE_SUFFIX =
@@ -119,12 +120,14 @@ export async function imageGenerator(options: ImageGeneratorOptions): Promise<Im
   }
 
   // Fallback if all retries failed
+  let isFallback = false;
   if (!outputBuffer) {
     console.warn(
       `[imageGenerator:${style}] Failed after ${maxRetries} attempts. Falling back to black transparent pixel.`
     );
     outputBuffer = BLACK_FALLBACK_PNG;
     mediaType = 'image/png';
+    isFallback = true;
   }
 
   // S3 upload
@@ -140,6 +143,7 @@ export async function imageGenerator(options: ImageGeneratorOptions): Promise<Im
     base64: base64Output,
     url,
     mediaType,
+    isFallback,
   };
 }
 

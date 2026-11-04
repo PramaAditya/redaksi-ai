@@ -1,6 +1,6 @@
 import { generateObject, generateText } from 'ai';
 import { z } from 'zod';
-import { PipelineContext, ResearchResult, googleAI, withRetry } from '../../../../utils.js';
+import { PipelineContext, ResearchResult, googleAI, withRetry, mapWithConcurrency, SLIDE_CONCURRENCY } from '../../../../utils.js';
 import { censorText } from '../../../../sanitize.js';
 import { uploadToS3 } from '../../../../s3.js';
 import { generateMedia } from '../../../../media.js';
@@ -41,7 +41,7 @@ export const carouselMultiImagesTemplateConfig = {
   ] as any[]
 };
 
-export async function generateCarouselMultiImagesMedia(templateData: any, settings: any): Promise<{ type: 'image' | 'video', url: string }[]> {
+export async function generateCarouselMultiImagesMedia(templateData: any, settings: any): Promise<{ type: 'image', url: string }[]> {
   const pages: any[] = [];
   
   pages.push({
@@ -194,60 +194,60 @@ Your task is to parse the gathered facts into final components for an Instagram 
     throw new Error('Gagal mendapatkan URL gambar.');
   }
 
-  // Phase 3.5: Curate Images for Slides
+  // Phase 3.5: Curate Images for Slides (Parallel with Bounded Concurrency)
   await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '🔍 Mencari gambar untuk setiap slide...'));
   
-  const curatedSlides = [];
-  
-  for (let i = 0; i < contentParams.slides.length; i++) {
-    const slide = contentParams.slides[i];
-    console.log(`[Phase 3.5] Curating image for slide ${i + 1}: ${slide.image_search_query}`);
-    let slide_image = '';
-    try {
-      const curated = await curateImages({
-        query: slide.image_search_query,
-        context: slide.text,
-        targetCount: 1
-      });
-      
-      if (curated && curated.length > 0 && curated[0].originalUrl) {
-         console.log(`[Phase 3.5] Downloading curated image for slide ${i+1}: ${curated[0].originalUrl}`);
-         const res = await fetch(curated[0].originalUrl, { signal: AbortSignal.timeout(10000) });
-         if (res.ok) {
-           let mimeType = res.headers.get('content-type') || 'image/jpeg';
-           if (!mimeType.startsWith('image/')) {
-             mimeType = 'image/jpeg';
-           }
-           const ext = mimeType === 'image/png' ? '.png' : '.jpg';
-           const arrayBuffer = await res.arrayBuffer();
-           slide_image = await uploadToS3(Buffer.from(arrayBuffer), mimeType, ext) || '';
-         }
-      }
-    } catch (e: any) {
-      console.warn(`[Phase 3.5] Failed to curate or upload image for slide ${i+1}:`, e.message);
-    }
-    
-    if (!slide_image) {
-      console.log(`[Phase 3.5] No image found for slide ${i + 1}. Generating via imageGenerator (realistic)...`);
+  const curatedSlides = await mapWithConcurrency(
+    contentParams.slides,
+    SLIDE_CONCURRENCY,
+    async (slide: any, i: number) => {
+      console.log(`[Phase 3.5] Curating image for slide ${i + 1}: ${slide.image_search_query}`);
+      let slide_image = '';
       try {
-        const generated = await imageGenerator({
-          prompt: slide.image_search_query,
-          style: 'realistic',
-          aspectRatio: '1:1',
-          uploadToS3: true,
+        const curated = await curateImages({
+          query: slide.image_search_query,
+          context: slide.text,
+          targetCount: 1
         });
-        slide_image = generated.url || '';
-      } catch (err: any) {
-        console.warn(`[Phase 3.5] Failed to generate slide image:`, err.message);
+        
+        if (curated && curated.length > 0 && curated[0].originalUrl) {
+          console.log(`[Phase 3.5] Downloading curated image for slide ${i + 1}: ${curated[0].originalUrl}`);
+          const res = await fetch(curated[0].originalUrl, { signal: AbortSignal.timeout(10000) });
+          if (res.ok) {
+            let mimeType = res.headers.get('content-type') || 'image/jpeg';
+            if (!mimeType.startsWith('image/')) {
+              mimeType = 'image/jpeg';
+            }
+            const ext = mimeType === 'image/png' ? '.png' : '.jpg';
+            const arrayBuffer = await res.arrayBuffer();
+            slide_image = await uploadToS3(Buffer.from(arrayBuffer), mimeType, ext) || '';
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[Phase 3.5] Failed to curate or upload image for slide ${i + 1}:`, e.message);
       }
+      
+      if (!slide_image) {
+        console.log(`[Phase 3.5] No image found for slide ${i + 1}. Generating via imageGenerator (realistic)...`);
+        try {
+          const generated = await imageGenerator({
+            prompt: slide.image_search_query,
+            style: 'realistic',
+            aspectRatio: '1:1',
+            uploadToS3: true,
+          });
+          slide_image = (!generated.isFallback && generated.url) ? generated.url : coverImageUrl;
+        } catch (err: any) {
+          console.warn(`[Phase 3.5] Failed to generate slide image:`, err.message);
+        }
+      }
+
+      return {
+        text: slide.text,
+        slide_image
+      };
     }
-
-    curatedSlides.push({
-      text: slide.text,
-      slide_image
-    });
-  }
-
+  );
   await withRetry(() => telegram.editMessageText(statusMsg.chat.id, statusMsg.message_id, undefined, '🎨 Merender desain post...'));
 
   // Phase 4: Image Rendering
@@ -358,7 +358,7 @@ RULES:
   // Phase 5: Publishing via Queue
   console.log(`[Phase 5] Saving to Queue and preparing Buffer URLs`);
   
-  let allPublishUrls: { type: 'image' | 'video', url: string }[] = renderedUrls.map(url => ({
+  let allPublishUrls: { type: 'image', url: string }[] = renderedUrls.map(url => ({
     type: 'image',
     url
   }));

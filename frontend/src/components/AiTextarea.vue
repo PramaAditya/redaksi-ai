@@ -26,6 +26,7 @@ const onPaste = (e: ClipboardEvent) => {
         const file = items[i].getAsFile()
         if (file) {
           e.preventDefault()
+          e.stopPropagation()
           emit('pasteImage', file)
           return
         }

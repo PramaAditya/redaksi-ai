@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { ArrowLeft, Save, RefreshCw, ArrowUp, ArrowDown, Plus, Sparkles, Zap, Search, Lightbulb } from 'lucide-vue-next'
+import { ArrowLeft, Save, RefreshCw, ArrowUp, ArrowDown, Plus, Sparkles, Zap, Search, Lightbulb, Eye, ExternalLink } from 'lucide-vue-next'
 import { getAuthHeaders, apiFetch } from '../auth'
 import { Fancybox } from '@fancyapps/ui'
 import ImageUploader from '../components/ImageUploader.vue'
 import AiTextarea from '../components/AiTextarea.vue'
+import LiveSlidePreview from '../components/LiveSlidePreview.vue'
+import { useConnectionStore } from '../store'
 
 const toast = useToast()
+const connectionStore = useConnectionStore()
 
 const route = useRoute()
 const postId = route.params.id
@@ -83,13 +86,6 @@ const FALLBACK_TEMPLATES = [
     ]
   },
   {
-    id: 'video:poros.perjuangan:title_only',
-    name: 'Title Only',
-    uiSchema: [
-      { name: 'title', type: 'text', label: 'Video Title' }
-    ]
-  },
-  {
     id: 'image:aa.geopolitik:carousel_analysis',
     name: 'Carousel Analysis (AA Geopolitik)',
     uiSchema: [
@@ -140,7 +136,19 @@ const FALLBACK_TEMPLATES = [
 
 const availableTemplates = ref<any[]>([...FALLBACK_TEMPLATES])
 const activePasteTarget = ref<{ type: 'top' | 'slide', index?: number } | null>(null)
+const livePreviewRef = ref<InstanceType<typeof LiveSlidePreview> | null>(null)
+const lastRenderedSnapshot = ref<string>('')
 
+const connectionLogoUrl = computed(() => {
+  const connId = post.value?.connectionId || connectionStore.activeConnectionId
+  const conn = connectionStore.connections.find((c: any) => c.id === connId)
+  return (conn as any)?.logoImageUrl || ''
+})
+
+const hasUnrenderedChanges = computed(() => {
+  if (!post.value?.templateData || !lastRenderedSnapshot.value) return false
+  return JSON.stringify(post.value.templateData) !== lastRenderedSnapshot.value
+})
 interface EditorialAgentConfig {
   id: string;
   name: string;
@@ -321,7 +329,7 @@ const fetchTemplates = async () => {
 const openLightbox = (mediaArray: any[], index: number) => {
   const items = mediaArray.map(m => ({
     src: m.url,
-    type: m.type === 'video' ? 'video' : 'image'
+    type: 'image'
   }))
   Fancybox.show(items, { startIndex: index })
 }
@@ -350,6 +358,7 @@ const fetchPost = async () => {
         }
       })
     }
+    lastRenderedSnapshot.value = JSON.stringify(post.value.templateData)
     error.value = ''
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
@@ -399,6 +408,13 @@ const moveToPending = async () => {
 const removeSlide = (fieldName: string, index: number) => {
   if (post.value.templateData[fieldName] && post.value.templateData[fieldName].length > 1) {
     post.value.templateData[fieldName].splice(index, 1)
+    if (activePasteTarget.value?.type === 'slide' && activePasteTarget.value.index !== undefined) {
+      if (activePasteTarget.value.index === index) {
+        activePasteTarget.value = null
+      } else if (activePasteTarget.value.index > index) {
+        activePasteTarget.value = { type: 'slide', index: activePasteTarget.value.index - 1 }
+      }
+    }
   }
 }
 
@@ -500,6 +516,7 @@ const regenerateMedia = async () => {
       method: 'POST'
     })
     post.value.media = data.media
+    lastRenderedSnapshot.value = JSON.stringify(post.value.templateData)
     toast.add({ title: 'Media grid regenerated successfully!', color: 'success' })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
@@ -532,7 +549,10 @@ const generateAiImage = async (target: 'cover' | 'slide' | 'all', slideIndex?: n
       })
     })
     post.value.templateData = data.templateData
-    if (data.media) post.value.media = data.media
+    if (data.media) {
+      post.value.media = data.media
+      lastRenderedSnapshot.value = JSON.stringify(post.value.templateData)
+    }
     toast.add({
       title: target === 'all' ? 'All AI images generated & rendered!' : 'AI background image generated!',
       color: 'success'
@@ -556,6 +576,7 @@ const regenerateContent = async () => {
     post.value.text = data.text
     post.value.templateData = data.templateData
     post.value.media = data.media
+    lastRenderedSnapshot.value = JSON.stringify(post.value.templateData)
     toast.add({ title: 'Slides copy and media regenerated successfully!', color: 'success' })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
@@ -570,6 +591,7 @@ const regeneratePipeline = async () => {
   if (!confirm('Re-run the entire pipeline? This will perform fresh web research, opinion analysis, and re-create slides & images.')) {
     return
   }
+  await saveChanges()
   generating.value = true
   regeneratingType.value = 'pipeline'
   try {
@@ -581,6 +603,7 @@ const regeneratePipeline = async () => {
     post.value.media = data.media
     if (data.agentInsights) post.value.agentInsights = data.agentInsights
     if (data.researchResult) post.value.researchResult = data.researchResult
+    lastRenderedSnapshot.value = JSON.stringify(post.value.templateData)
     toast.add({ title: 'Whole pipeline regenerated successfully!', color: 'success' })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
@@ -649,8 +672,8 @@ const regeneratePipeline = async () => {
     <div v-if="loading" class="text-center py-10 text-muted">Loading...</div>
     <UAlert v-else-if="error" color="error" variant="soft" :description="error" class="mb-4" />
     
-    <div v-else-if="post" class="space-y-6 max-w-4xl mx-auto">
-      
+    <div v-else-if="post" class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div class="lg:col-span-7 space-y-6 min-w-0">
       <!-- AI Editorial Insights (Research, Opinion, etc.) -->
       <div v-if="availableInsightTabs.length > 0" class="bg-default shadow rounded-lg p-6">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
@@ -708,8 +731,17 @@ const regeneratePipeline = async () => {
 
       <!-- Media Data Editor -->
       <div class="bg-default shadow rounded-lg p-6">
-        <h2 class="text-lg font-bold mb-4 text-default">Media Data (Template: {{ post.templateId }})</h2>
-        
+        <div class="flex items-center justify-between gap-2 mb-4">
+          <h2 class="text-lg font-bold text-default">Media Data (Template: {{ post.templateId }})</h2>
+          <button
+            type="button"
+            @click="livePreviewRef?.openMobilePreview(0)"
+            class="lg:hidden inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-primary/40 bg-primary/10 text-primary cursor-pointer"
+          >
+            <Eye class="w-3.5 h-3.5" />
+            Preview Cover
+          </button>
+        </div>
         <div v-if="currentTemplateConfig && currentTemplateConfig.uiSchema">
           <div v-for="field in currentTemplateConfig.uiSchema" :key="field.name" class="mb-6">
             
@@ -718,6 +750,7 @@ const regeneratePipeline = async () => {
               <input 
                 v-model="post.templateData[field.name]" 
                 type="text"
+                @focus="activePasteTarget = { type: 'top' }"
                 class="w-full px-4 py-2.5 border border-default rounded-md shadow-sm focus:ring-1 focus:ring-primary focus:border-primary text-sm bg-default text-default placeholder-muted"
                 :placeholder="field.label"
               />
@@ -762,7 +795,13 @@ const regeneratePipeline = async () => {
                 <span class="text-xs text-muted">{{ post.templateData[field.name]?.length || 0 }} slide(s)</span>
               </div>
               
-              <div v-for="(_, i) in post.templateData[field.name]" :key="i" class="mb-6 relative bg-muted p-4 border border-default rounded-md transition">
+              <div
+                v-for="(_, i) in post.templateData[field.name]"
+                :key="i"
+                @focusin="activePasteTarget = { type: 'slide', index: Number(i) }"
+                class="mb-6 relative bg-muted p-4 border rounded-md transition"
+                :class="activePasteTarget?.type === 'slide' && activePasteTarget?.index === Number(i) ? 'border-primary/60 ring-1 ring-primary/30' : 'border-default'"
+              >
                 <!-- Slide Header -->
                 <div class="flex justify-between items-center mb-3">
                   <div class="flex items-center gap-2">
@@ -770,8 +809,15 @@ const regeneratePipeline = async () => {
                     <span v-if="field.itemType === 'polymorphic'" class="px-2 py-0.5 text-xs rounded font-medium bg-default text-muted border border-default">
                       {{ getSlideTypeLabel(post.templateData[field.name][i], field) }}
                     </span>
+                    <button
+                      type="button"
+                      @click="livePreviewRef?.openMobilePreview(Number(i) + 1)"
+                      class="lg:hidden inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded border border-primary/40 bg-primary/10 text-primary cursor-pointer"
+                    >
+                      <Eye class="w-3 h-3" />
+                      Preview
+                    </button>
                   </div>
-
                   <div class="flex items-center gap-2">
                     <!-- Type Selector (if polymorphic and has multiple slideTypes) -->
                     <select
@@ -1032,11 +1078,7 @@ const regeneratePipeline = async () => {
         
         <div class="grid grid-cols-3 gap-4">
           <div v-for="(m, i) in post.media" :key="i" @click="openLightbox(post.media, Number(i))" class="relative aspect-square rounded-lg overflow-hidden bg-elevated border border-default cursor-pointer hover:opacity-80 transition">
-            <img v-if="m.type === 'image'" :src="m.url" class="w-full h-full object-cover" />
-            <div v-else class="w-full h-full flex flex-col items-center justify-center text-muted p-4 text-center">
-              <span class="font-medium">Video</span>
-              <span class="text-xs truncate w-full mt-1">{{ m.url }}</span>
-            </div>
+            <img :src="m.url" class="w-full h-full object-cover" />
             <div class="absolute top-2 left-2 bg-inverted bg-opacity-60 text-inverted text-xs px-2 py-1 rounded shadow">
               {{ i === 0 ? 'Cover' : 'Slide ' + i }}
             </div>
@@ -1053,6 +1095,22 @@ const regeneratePipeline = async () => {
           guidancePlaceholder="e.g., add relevant hashtags, fix typo"
           :aiContext="getAiContextForField({ aiContext: 'This is the final caption for an Instagram news post. It should be engaging, informative, and include relevant hashtags at the end.' })"
           :connectionId="post.connectionId"
+        />
+      </div>
+      </div>
+
+      <!-- Right Column: Sticky Live Preview (Desktop) + Floating Modal Trigger (Mobile) -->
+      <div class="lg:col-span-5 lg:sticky lg:top-6">
+        <LiveSlidePreview
+          ref="livePreviewRef"
+          :templateId="post.templateId"
+          :templateData="post.templateData"
+          :logoUrl="connectionLogoUrl"
+          :renderedMedia="post.media"
+          :activeTarget="activePasteTarget"
+          :hasUnrenderedChanges="hasUnrenderedChanges"
+          :rendering="regeneratingType === 'media'"
+          @renderMedia="regenerateMedia"
         />
       </div>
     </div>

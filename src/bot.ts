@@ -12,18 +12,15 @@ const TEMPLATE_SHORT_CODES: Record<string, string> = {
   'carousel_dark': 'image:poros.perjuangan:carousel_dark',
   'carousel_multi': 'image:poros.perjuangan:carousel_multi_images',
   'single_page': 'image:poros.perjuangan:single_page',
-  'title_only': 'video:poros.perjuangan:title_only',
 };
 
 const TEMPLATE_TO_SHORT: Record<string, string> = {
   'image:poros.perjuangan:carousel_dark': 'carousel_dark',
   'image:poros.perjuangan:carousel_multi_images': 'carousel_multi',
   'image:poros.perjuangan:single_page': 'single_page',
-  'video:poros.perjuangan:title_only': 'title_only',
   'image:kabar.perjuangan:carousel_dark': 'carousel_dark',
   'image:kabar.perjuangan:carousel_multi_images': 'carousel_multi',
   'image:kabar.perjuangan:single_page': 'single_page',
-  'video:kabar.perjuangan:title_only': 'title_only',
 };
 
 function resolveTemplateId(code: string): string {
@@ -33,7 +30,7 @@ function resolveTemplateId(code: string): string {
 function getShortTemplateCode(templateId: string): string {
   return TEMPLATE_TO_SHORT[templateId] || templateId;
 }
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { InteractiveMenu } from './utils/interactiveMenu.js';
 import dns from 'dns';
 import { uploadToS3 } from './s3.js';
@@ -61,7 +58,7 @@ const bot = new Telegraf(botToken, {
   }
 });
 
-const mediaGroupAccumulator = new Map<string, { timer: NodeJS.Timeout, items: { fileId: string, caption?: string, msgId: number, type: 'image' | 'video', mimeType?: string }[] }>();
+const mediaGroupAccumulator = new Map<string, { timer: NodeJS.Timeout, items: { fileId: string, caption?: string, msgId: number, type: 'image', mimeType?: string }[] }>();
 
 async function uploadTelegramMediaToS3(url: string, mimeType?: string): Promise<string> {
   console.log(`[Bot] Fetching media from URL: ${url}`);
@@ -83,16 +80,12 @@ async function uploadTelegramMediaToS3(url: string, mimeType?: string): Promise<
   let ext = '.jpg';
   if (mimeType === 'image/png') ext = '.png';
   else if (mimeType === 'image/webp') ext = '.webp';
-  else if (mimeType === 'video/mp4') ext = '.mp4';
-  else if (mimeType === 'video/quicktime') ext = '.mov';
-  else if (mimeType === 'video/webm') ext = '.webm';
   else if (!mimeType && url.includes('.')) {
       const extMatch = url.match(/\.([a-zA-Z0-9]+)(\?|$)/);
       if (extMatch) ext = `.${extMatch[1]}`;
   }
 
-  const defaultMimeType = url.match(/\.(mp4|mov|webm)$/i) ? 'video/mp4' : 'image/jpeg';
-  const resolvedMimeType = mimeType || defaultMimeType;
+  const resolvedMimeType = mimeType || 'image/jpeg';
 
   return uploadToS3(buffer, resolvedMimeType, ext);
 }
@@ -123,53 +116,7 @@ async function askForTemplate(ctx: any, ideaId: number) {
     return;
   }
 
-  const media = idea.media || [];
-  const hasVideo = media.some(m => m.type === 'video');
-  const isSingleVideo = media.length === 1 && media[0].type === 'video';
-
-  // Kalo cuma 1 video input, langsung kepilih title video only
-  if (isSingleVideo) {
-    if (!idea.connectionId) {
-      await promptConnectionSelection(ctx, ideaId);
-      return;
-    }
-
-    const videoTemplate = Object.values(TEMPLATES).find(t => t.id.startsWith('video:'));
-    const templateId = videoTemplate ? videoTemplate.id : 'video:poros.perjuangan:title_only';
-
-    await db.insert(jobsTable).values({
-      connectionId: idea.connectionId,
-      chatId: idea.chatId,
-      messageId: idea.messageId,
-      text: idea.text,
-      media: idea.media,
-      templateId: templateId,
-      status: 'pending'
-    });
-
-    await db.update(ideasTable).set({ status: 'converted' }).where(eq(ideasTable.id, ideaId));
-
-    const connection = idea.connectionId ? await getConnection(idea.connectionId) : null;
-    const successMsg = formatQueueConfirmation({
-      templateId,
-      accountName: connection?.name,
-    });
-    if (ctx.callbackQuery) {
-      await InteractiveMenu.finalize(ctx, successMsg, 'HTML');
-    } else {
-      await InteractiveMenu.send(ctx, successMsg, [], 'HTML');
-    }
-    return;
-  }
-
-  // Ga muncul kalo no media input atau cuma image(s) doang;
-  // Muncul kalo di media group input ada video di dalamnya
-  const availableTemplates = Object.values(TEMPLATES).filter(t => {
-    if (t.id.startsWith('video:')) {
-      return hasVideo;
-    }
-    return true;
-  });
+  const availableTemplates = Object.values(TEMPLATES);
 
   const templateButtons = availableTemplates.map(t => {
     return [{ text: t.name, callback_data: `convert_${ideaId}_${getShortTemplateCode(t.id)}` }];
@@ -229,7 +176,7 @@ if (process.env.APP_URL) {
 
 // /start command with welcome message and inline Mini App button
 bot.command('start', async (ctx) => {
-  const welcomeText = `👋 <b>Selamat datang di Bot Poros Perjuangan!</b>\n\nKirimkan teks berita, link, atau foto/video untuk membuat konten Instagram carousel otomatis.\n\nAnda juga dapat membuka <b>Web Dashboard</b> langsung di Telegram melalui tombol di bawah atau tombol menu di kiri bawah:`;
+  const welcomeText = `👋 <b>Selamat datang di Bot Poros Perjuangan!</b>\n\nKirimkan teks berita, link, atau foto untuk membuat konten Instagram carousel otomatis.\n\nAnda juga dapat membuka <b>Web Dashboard</b> langsung di Telegram melalui tombol di bawah atau tombol menu di kiri bawah:`;
   const buttons = process.env.APP_URL ? [
     [{ text: '📊 Buka Dashboard', web_app: { url: process.env.APP_URL } }]
   ] : [];
@@ -300,7 +247,7 @@ bot.on(message('text'), async (ctx) => {
   }
 });
 
-async function handleMediaMessage(ctx: any, isVideo: boolean) {
+async function handlePhotoMessage(ctx: any) {
   const chatId = ctx.chat.id.toString();
 
   const baseCaption = ctx.message.caption || '';
@@ -319,99 +266,97 @@ async function handleMediaMessage(ctx: any, isVideo: boolean) {
       }
     }
   }
-  let fileId = '';
-  let mimeType: string | undefined;
-
-  if (isVideo) {
-    fileId = ctx.message.video.file_id;
-    mimeType = ctx.message.video.mime_type;
-  } else {
-    const photos = ctx.message.photo;
-    fileId = photos[photos.length - 1].file_id;
-    mimeType = 'image/jpeg';
-  }
+  const photos = ctx.message.photo;
+  const fileId = photos[photos.length - 1].file_id;
+  const mimeType = 'image/jpeg';
   
   const mediaGroupId = ctx.message.media_group_id;
   
   if (mediaGroupId) {
-    console.log(`[Bot] Received ${isVideo ? 'video' : 'photo'} part of media group ${mediaGroupId}`);
-    if (!mediaGroupAccumulator.has(mediaGroupId)) {
-      mediaGroupAccumulator.set(mediaGroupId, {
-        items: [],
-        timer: setTimeout(async () => {
-          const groupData = mediaGroupAccumulator.get(mediaGroupId);
-          mediaGroupAccumulator.delete(mediaGroupId);
-          if (!groupData) return;
-          
-          console.log(`[Bot] Processing accumulated media group ${mediaGroupId} with ${groupData.items.length} items`);
-          
-          try {
-            groupData.items.sort((a, b) => a.msgId - b.msgId);
-            
-            const mediaItems = [];
-            for (const item of groupData.items) {
-              let url = '';
-              let retries = 3;
-              while (retries > 0) {
-                try {
-                  const fileUrl = await ctx.telegram.getFileLink(item.fileId);
-                  const telegramUrl = fileUrl.toString();
-                  url = await uploadTelegramMediaToS3(telegramUrl, item.mimeType);
-                  break;
-                } catch (e: any) {
-                  retries--;
-                  console.warn(`[Bot] Failed to download/upload ${item.fileId}, retries left: ${retries}. Error: ${e.message}`, e.cause);
-                  if (retries === 0) throw e;
-                  await new Promise(res => setTimeout(res, 1000));
-                }
-              }
-              mediaItems.push({ type: item.type, url, mimeType: item.mimeType });
+    console.log(`[Bot] Received photo part of media group ${mediaGroupId}`);
+    const flushMediaGroup = async () => {
+      const groupData = mediaGroupAccumulator.get(mediaGroupId);
+      mediaGroupAccumulator.delete(mediaGroupId);
+      if (!groupData || groupData.items.length === 0) return;
+      
+      console.log(`[Bot] Processing accumulated media group ${mediaGroupId} with ${groupData.items.length} items`);
+      
+      try {
+        groupData.items.sort((a, b) => a.msgId - b.msgId);
+        
+        const mediaItems = [];
+        for (const item of groupData.items) {
+          let url = '';
+          let retries = 3;
+          while (retries > 0) {
+            try {
+              const fileUrl = await ctx.telegram.getFileLink(item.fileId);
+              const telegramUrl = fileUrl.toString();
+              url = await uploadTelegramMediaToS3(telegramUrl, item.mimeType);
+              break;
+            } catch (e: any) {
+              retries--;
+              console.warn(`[Bot] Failed to download/upload ${item.fileId}, retries left: ${retries}. Error: ${e.message}`, e.cause);
+              if (retries === 0) throw e;
+              await new Promise(res => setTimeout(res, 1000));
             }
-            
-            const groupCaption = groupData.items.find(item => item.caption)?.caption || 'No specific text provided, analyze the media context if possible.';
-            
-            const connections = await getConnections();
-            const defaultConnectionId = connections.length === 1 ? connections[0].id : null;
-
-            const [idea] = await db.insert(ideasTable).values({
-              connectionId: defaultConnectionId,
-              chatId,
-              messageId: groupData.items[0].msgId,
-              text: groupCaption,
-              media: mediaItems,
-              status: 'pending'
-            }).returning();
-            
-            if (defaultConnectionId) {
-              await InteractiveMenu.send(ctx, 'Ide (album) tersimpan. Apakah Anda ingin membuat konten dari ide ini?', [
-                [{ text: '✅ Ya, Buat Konten', callback_data: `make_post_${idea.id}` }],
-                [{ text: '❌ Batal', callback_data: `cancel_idea_${idea.id}` }]
-              ], 'Markdown', { reply_to_message_id: groupData.items[0].msgId });
-            } else {
-              await promptConnectionSelection(ctx, idea.id);
-            }
-            
-          } catch (error) {
-            console.error('[Bot] Error saving media group idea:', error);
-            try { await ctx.reply('Terjadi kesalahan sistem saat menyimpan antrean album.'); } catch (e) {}
           }
-        }, 2000)
-      });
+          mediaItems.push({ type: item.type, url, mimeType: item.mimeType });
+        }
+        
+        const groupCaption = groupData.items.find(item => item.caption)?.caption || 'No specific text provided, analyze the media context if possible.';
+        
+        const connections = await getConnections();
+        const defaultConnectionId = connections.length === 1 ? connections[0].id : null;
+
+        const [idea] = await db.insert(ideasTable).values({
+          connectionId: defaultConnectionId,
+          chatId,
+          messageId: groupData.items[0].msgId,
+          text: groupCaption,
+          media: mediaItems,
+          status: 'pending'
+        }).returning();
+        
+        if (defaultConnectionId) {
+          await InteractiveMenu.send(ctx, 'Ide (album) tersimpan. Apakah Anda ingin membuat konten dari ide ini?', [
+            [{ text: '✅ Ya, Buat Konten', callback_data: `make_post_${idea.id}` }],
+            [{ text: '❌ Batal', callback_data: `cancel_idea_${idea.id}` }]
+          ], 'Markdown', { reply_to_message_id: groupData.items[0].msgId });
+        } else {
+          await promptConnectionSelection(ctx, idea.id);
+        }
+        
+      } catch (error) {
+        console.error('[Bot] Error saving media group idea:', error);
+        try { await ctx.reply('Terjadi kesalahan sistem saat menyimpan antrean album.'); } catch (e) {}
+      }
+    };
+
+    let group = mediaGroupAccumulator.get(mediaGroupId);
+    if (!group) {
+      group = {
+        items: [],
+        timer: setTimeout(flushMediaGroup, 2000)
+      };
+      mediaGroupAccumulator.set(mediaGroupId, group);
+    } else {
+      clearTimeout(group.timer);
+      group.timer = setTimeout(flushMediaGroup, 2000);
     }
     
-    const group = mediaGroupAccumulator.get(mediaGroupId)!;
     group.items.push({
       fileId,
       caption: caption,
       msgId: ctx.message.message_id,
-      type: isVideo ? 'video' : 'image',
+      type: 'image',
       mimeType
     });
     
     return;
   }
 
-  console.log(`[Bot] Received single ${isVideo ? 'video' : 'photo'} message from ${ctx.chat.id}`);
+  console.log(`[Bot] Received single photo message from ${ctx.chat.id}`);
   let finalS3Url: string | undefined = undefined;
   let retries = 3;
   while (retries > 0) {
@@ -443,7 +388,7 @@ async function handleMediaMessage(ctx: any, isVideo: boolean) {
       chatId,
       messageId: ctx.message.message_id,
       text,
-      media: [{ type: isVideo ? 'video' : 'image', url: finalS3Url, mimeType }],
+      media: [{ type: 'image', url: finalS3Url, mimeType }],
       status: 'pending'
     }).returning();
     
@@ -510,28 +455,6 @@ bot.on('callback_query', async (ctx: any) => {
         return ctx.answerCbQuery('Silakan pilih akun/connection terlebih dahulu.');
       }
 
-      // Jika template video (tidak ada hero image cover), langsung masukkan antrean
-      if (templateId.startsWith('video:')) {
-        await db.insert(jobsTable).values({
-          connectionId: idea.connectionId,
-          chatId: idea.chatId,
-          messageId: idea.messageId,
-          text: idea.text,
-          media: idea.media,
-          templateId: templateId,
-          status: 'pending'
-        });
-
-        await db.update(ideasTable).set({ status: 'converted' }).where(eq(ideasTable.id, ideaId));
-        const connection = idea.connectionId ? await getConnection(idea.connectionId) : null;
-        const successMsg = formatQueueConfirmation({
-          templateId,
-          accountName: connection?.name,
-        });
-        await InteractiveMenu.finalize(ctx, successMsg, 'HTML');
-        return;
-      }
-
       // Untuk template image/carousel, tanyakan style hero image
       await askForHeroStyle(ctx, ideaId, templateId);
       await ctx.answerCbQuery();
@@ -554,10 +477,16 @@ bot.on('callback_query', async (ctx: any) => {
         heroStyle = styleMatch[3];
       }
 
-      const [idea] = await db.select().from(ideasTable).where(eq(ideasTable.id, ideaId));
-      if (!idea) return ctx.answerCbQuery('Ide tidak ditemukan.');
-      if (idea.status !== 'pending') return ctx.answerCbQuery('Ide ini sudah diproses.');
-      if (!idea.connectionId) return ctx.answerCbQuery('Silakan pilih akun/connection terlebih dahulu.');
+      const [existingIdea] = await db.select().from(ideasTable).where(eq(ideasTable.id, ideaId));
+      if (!existingIdea) return ctx.answerCbQuery('Ide tidak ditemukan.');
+      if (!existingIdea.connectionId) return ctx.answerCbQuery('Silakan pilih akun/connection terlebih dahulu.');
+
+      const [idea] = await db.update(ideasTable)
+        .set({ status: 'converted' })
+        .where(sql`${ideasTable.id} = ${ideaId} AND ${ideasTable.status} = 'pending'`)
+        .returning();
+
+      if (!idea) return ctx.answerCbQuery('Ide ini sudah diproses.');
 
       await db.insert(jobsTable).values({
         connectionId: idea.connectionId,
@@ -569,9 +498,6 @@ bot.on('callback_query', async (ctx: any) => {
         heroStyle: heroStyle,
         status: 'pending'
       });
-
-      await db.update(ideasTable).set({ status: 'converted' }).where(eq(ideasTable.id, ideaId));
-
       const connection = idea.connectionId ? await getConnection(idea.connectionId) : null;
       const hasImage = idea.media && Array.isArray(idea.media) && idea.media.some((m: any) => m.type === 'image');
       const successMsg = formatQueueConfirmation({
@@ -596,8 +522,7 @@ bot.on('callback_query', async (ctx: any) => {
   }
 });
 
-bot.on(message('photo'), (ctx) => handleMediaMessage(ctx, false));
-bot.on(message('video'), (ctx) => handleMediaMessage(ctx, true));
+bot.on(message('photo'), (ctx) => handlePhotoMessage(ctx));
 
 const startBotWithRetry = async (retries = 10, delayMs = 3000) => {
   for (let i = 0; i < retries; i++) {

@@ -41,7 +41,7 @@ const schema = z.object({
   image_prompt: z.string(),
 });
 
-export async function generateSinglePageMedia(templateData: any, settings: any): Promise<{ type: 'image' | 'video', url: string }[]> {
+export async function generateSinglePageMedia(templateData: any, settings: any): Promise<{ type: 'image', url: string }[]> {
   const pages: any[] = [];
   
   pages.push({
@@ -240,7 +240,7 @@ RULES:
   // Phase 5: Publishing via Queue
   console.log(`[Phase 5] Saving to Queue and preparing Buffer URLs`);
   
-  let allPublishUrls: { type: 'image' | 'video', url: string }[] = renderedUrls.map(url => ({
+  let allPublishUrls: { type: 'image', url: string }[] = renderedUrls.map(url => ({
     type: 'image',
     url
   }));

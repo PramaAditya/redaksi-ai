@@ -81,6 +81,8 @@ export async function checkUpcomingSchedule({
         timeZone: 'Asia/Jakarta'
       });
       const currentDay = formatter.format(referenceTime).toLowerCase();
+      const tomorrowDate = new Date(referenceTime.getTime() + 24 * 60 * 60 * 1000);
+      const tomorrowDay = formatter.format(tomorrowDate).toLowerCase();
 
       // Convert referenceTime to minutes since midnight in Asia/Jakarta
       const timeFormatter = new Intl.DateTimeFormat('en-US', {
@@ -94,20 +96,34 @@ export async function checkUpcomingSchedule({
       const currentMin = parseInt(timeParts.find(p => p.type === 'minute')?.value || '0', 10);
       const currentTotalMins = currentHour * 60 + currentMin;
 
-      // Find slots today that are in the future within 60 minutes
-      const matchedSlot = connection.postingSlots.find((slot: { day: string; time: string }) => {
-        if (slot.day.toLowerCase() !== currentDay) return false;
+      const computeMinutesUntilSlot = (slot: { day: string; time: string }): number | null => {
+        const slotDay = slot.day.toLowerCase();
         const [sHour, sMin] = slot.time.split(':').map(Number);
         const slotTotalMins = sHour * 60 + sMin;
-        const diff = slotTotalMins - currentTotalMins;
-        return diff > 0 && diff <= 60;
-      });
+        if (slotDay === currentDay) {
+          const diff = slotTotalMins - currentTotalMins;
+          if (diff > 0 && diff <= 60) return diff;
+        }
+        if (slotDay === tomorrowDay) {
+          const diffAcrossMidnight = (1440 - currentTotalMins) + slotTotalMins;
+          if (diffAcrossMidnight > 0 && diffAcrossMidnight <= 60) return diffAcrossMidnight;
+        }
+        return null;
+      };
+
+      // Find slots today (or rolling over past midnight into tomorrow) within 60 minutes
+      let matchedSlot: { day: string; time: string } | undefined;
+      let minutesRemaining = 0;
+      for (const slot of connection.postingSlots) {
+        const diff = computeMinutesUntilSlot(slot);
+        if (diff !== null) {
+          matchedSlot = slot;
+          minutesRemaining = diff;
+          break;
+        }
+      }
 
       if (matchedSlot) {
-        const [sHour, sMin] = matchedSlot.time.split(':').map(Number);
-        const slotTotalMins = sHour * 60 + sMin;
-        const minutesRemaining = slotTotalMins - currentTotalMins;
-
         // Check if there is an unassigned pending post waiting in queue
         const pendingQueuePosts = await db
           .select()

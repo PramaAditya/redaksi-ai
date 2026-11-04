@@ -5,8 +5,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-v20+-blue?style=flat-square&logo=node.js" alt="Node Version">
   <img src="https://img.shields.io/badge/Gemini-3.1_Pro_%2F_3.8_Flash-orange?style=flat-square&logo=google" alt="Gemini Model">
-  <img src="https://img.shields.io/badge/Templates-5_Pipelines-purple?style=flat-square" alt="Templates">
-  <img src="https://img.shields.io/badge/Tests-74_Passing-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/Templates-4_Pipelines-purple?style=flat-square" alt="Templates">
+  <img src="https://img.shields.io/badge/Tests-73_Passing-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/Vue.js-v3.5-4fc08d?style=flat-square&logo=vuedotjs" alt="Vue Version">
   <img src="https://img.shields.io/badge/Drizzle_ORM-v0.45-green?style=flat-square" alt="Drizzle ORM">
   <img src="https://img.shields.io/badge/License-ISC-red?style=flat-square" alt="License">
@@ -78,7 +78,7 @@ npm install && npm --prefix frontend install && npm --prefix frontend run build
 # 2. Push Drizzle PostgreSQL schema and start the server + worker
 npx drizzle-kit push && npm run start
 
-# 3. Or launch the full stack (App, Worker, Puppeteer Renderer, Subtitles) via Docker
+# 3. Or launch the full stack (App, Worker, Puppeteer Renderer) via Docker
 docker-compose up --build -d
 ```
 
@@ -94,7 +94,6 @@ docker-compose up --build -d
 | `image:poros.perjuangan:carousel_dark` | `poros.perjuangan` | 1080x1350 Carousel | Editorial dark news + opinion slides with automated QR source slide |
 | `image:poros.perjuangan:carousel_multi_images` | `poros.perjuangan` | 1080x1350 Carousel | Multi-image news carousel with curated or uploaded per-slide imagery |
 | `image:poros.perjuangan:single_page` | `poros.perjuangan` | 1080x1350 Single | Single-frame breaking summary with `Dark-Dramatize` hero cover |
-| `video:poros.perjuangan:title_only` | `poros.perjuangan` | Reel Video | Automated video reel processing with FFmpeg overlay and captioning |
 
 <br>
 
@@ -103,7 +102,7 @@ docker-compose up --build -d
 ## Testing & CLI Runners
 
 ```bash
-# Run the full Vitest unit & pipeline test suite (74 tests across 13 files)
+# Run the full Vitest unit & pipeline test suite (73 tests across 13 files)
 npm test
 
 # Preview AA Geopolitik Script-to-Carousel text & image prompts (no S3/Puppeteer required)

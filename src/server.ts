@@ -11,7 +11,7 @@ import { runAutomatedPipeline } from './agent.js';
 import { getEditorialAgentConfigs } from './agents/editorial/registry.js';
 import { runResearchPhase } from './agents/editorial/research.js';
 import { runOpinionPhase } from './agents/editorial/opinion.js';
-import { getBaseSystemPrompt } from './utils.js';
+import { getBaseSystemPrompt, mapWithConcurrency, SLIDE_CONCURRENCY } from './utils.js';
 import type { PipelineContext } from './utils.js';
 import multer from 'multer';
 import { uploadToS3 } from './s3.js';
@@ -59,21 +59,29 @@ const requireDashboardAuth = (req: express.Request, res: express.Response, next:
 
 app.post('/api/trigger-publish', requireTriggerAuth, async (req, res) => {
   try {
-    const pendingPosts = await db.select()
+    const pendingCandidates = await db.select()
       .from(queueTable)
-      .where(eq(queueTable.status, 'pending'))
+      .where(sql`status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= NOW())`)
       .orderBy(asc(queueTable.sortOrder))
       .limit(1);
 
-    if (pendingPosts.length === 0) {
+    if (pendingCandidates.length === 0) {
       return res.status(200).json({ message: 'No pending posts to publish.' });
     }
 
-    const post = pendingPosts[0];
-    if (!post.connectionId) {
-      return res.status(400).json({ error: 'Post missing connectionId' });
+    const [post] = await db.update(queueTable)
+      .set({ status: 'publishing' })
+      .where(sql`${queueTable.id} = ${pendingCandidates[0].id} AND ${queueTable.status} = 'pending'`)
+      .returning();
+
+    if (!post) {
+      return res.status(200).json({ message: 'No pending posts to publish (already claimed).' });
     }
 
+    if (!post.connectionId) {
+      await db.update(queueTable).set({ status: 'error', errorLog: 'Post missing connectionId' }).where(eq(queueTable.id, post.id));
+      return res.status(400).json({ error: 'Post missing connectionId' });
+    }
     console.log(`[API] Triggering publish for post ID ${post.id}`);
 
     try {
@@ -117,17 +125,13 @@ app.post('/api/upload', requireDashboardAuth, upload.single('image'), async (req
     const buffer = req.file.buffer;
     const mimeType = req.file.mimetype;
     
-    if (!mimeType.startsWith('image/') && !mimeType.startsWith('video/')) {
-      return res.status(400).json({ error: 'Only image and video files are allowed' });
+    if (!mimeType.startsWith('image/')) {
+      return res.status(400).json({ error: 'Only image files are allowed' });
     }
 
     let ext = '.jpg';
     if (mimeType === 'image/png') ext = '.png';
     else if (mimeType === 'image/webp') ext = '.webp';
-    else if (mimeType === 'video/mp4') ext = '.mp4';
-    else if (mimeType === 'video/quicktime') ext = '.mov';
-    else if (mimeType === 'video/webm') ext = '.webm';
-    
     const s3Url = await uploadToS3(buffer, mimeType, ext);
     if (!s3Url) throw new Error('Failed to upload to S3');
 
@@ -143,10 +147,10 @@ app.post('/api/generate-content', requireDashboardAuth, async (req, res) => {
     if (!text) return res.status(400).json({ error: 'Text input is required' });
     if (!connectionId) return res.status(400).json({ error: 'connectionId is required' });
 
-    let media: { type: 'image' | 'video', url: string }[] = [];
+    let media: { type: 'image', url: string }[] = [];
     if (mediaUrls && Array.isArray(mediaUrls)) {
       media = mediaUrls.map((url: string) => ({ 
-        type: url.match(/\.(mp4|mov|webm)$/i) ? 'video' : 'image', 
+        type: 'image' as const, 
         url 
       }));
     } else if (mediaUrl) {
@@ -236,22 +240,26 @@ app.post('/api/queue/from-script', requireDashboardAuth, async (req, res) => {
         console.warn('[from-script] Cover image generation failed:', err);
       }
 
-      for (let i = 0; i < contentParams.slides.length; i++) {
-        const slide = contentParams.slides[i];
-        const prompt = slide.image_prompt || `${slide.title} dark geopolitical photography`;
-        try {
-          const slideRes = await imageGenerator({
-            prompt,
-            style: 'dramatic',
-            aspectRatio: '4:5',
-            uploadToS3: true,
-          });
-          slideImages.push(slideRes?.url || coverImageUrl);
-        } catch (err) {
-          console.warn(`[from-script] Slide ${i + 1} image generation failed:`, err);
-          slideImages.push(coverImageUrl);
+      const generatedSlideUrls = await mapWithConcurrency(
+        contentParams.slides,
+        SLIDE_CONCURRENCY,
+        async (slide, i) => {
+          const prompt = slide.image_prompt || `${slide.title} dark geopolitical photography`;
+          try {
+            const slideRes = await imageGenerator({
+              prompt,
+              style: 'dramatic',
+              aspectRatio: '4:5',
+              uploadToS3: true,
+            });
+            return (!slideRes?.isFallback && slideRes?.url) ? slideRes.url : coverImageUrl;
+          } catch (err) {
+            console.warn(`[from-script] Slide ${i + 1} image generation failed:`, err);
+            return coverImageUrl;
+          }
         }
-      }
+      );
+      slideImages.push(...generatedSlideUrls);
     }
 
     const slidesWithImages = contentParams.slides.map((s, idx) => ({
@@ -271,7 +279,7 @@ app.post('/api/queue/from-script', requireDashboardAuth, async (req, res) => {
       inputImages: []
     };
 
-    let renderedMedia: { type: 'image' | 'video'; url: string }[] = [];
+    let renderedMedia: { type: 'image'; url: string }[] = [];
     if (generateImages) {
       try {
         renderedMedia = await generateCarouselAnalysisMedia(templateData, connection);
@@ -342,20 +350,20 @@ app.post('/api/ideas/:id/convert', requireDashboardAuth, async (req, res) => {
     const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
-    const [idea] = await db.select().from(ideasTable).where(eq(ideasTable.id, id));
-    if (!idea) return res.status(404).json({ error: 'Idea not found' });
-    
-    if (idea.status === 'converted') {
+    const existing = await db.select().from(ideasTable).where(eq(ideasTable.id, id));
+    if (existing.length === 0) return res.status(404).json({ error: 'Idea not found' });
+
+    const [idea] = await db.update(ideasTable)
+      .set({ status: 'converted' })
+      .where(sql`${ideasTable.id} = ${id} AND ${ideasTable.status} != 'converted'`)
+      .returning();
+
+    if (!idea) {
       return res.status(400).json({ error: 'Idea already converted' });
     }
 
     const { templateId } = req.body;
-    let chosenTemplateId = templateId;
-    if (!chosenTemplateId) {
-      const media = idea.media || [];
-      const isSingleVideo = media.length === 1 && media[0]?.type === 'video';
-      chosenTemplateId = isSingleVideo ? 'video:poros.perjuangan:title_only' : 'image:poros.perjuangan:carousel_dark';
-    }
+    const chosenTemplateId = templateId || 'image:poros.perjuangan:carousel_dark';
 
     await db.insert(jobsTable).values({
       connectionId: idea.connectionId,
@@ -366,8 +374,6 @@ app.post('/api/ideas/:id/convert', requireDashboardAuth, async (req, res) => {
       templateId: chosenTemplateId,
       status: 'pending'
     });
-
-    await db.update(ideasTable).set({ status: 'converted' }).where(eq(ideasTable.id, id));
     
     res.json({ message: 'Idea converted to job successfully' });
   } catch (error: unknown) {
@@ -427,6 +433,17 @@ app.post('/api/jobs/:id/retry', requireDashboardAuth, async (req, res) => {
   }
 });
 
+app.delete('/api/jobs/:id', requireDashboardAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id as string, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid job ID' });
+    await db.delete(jobsTable).where(eq(jobsTable.id, id));
+    res.json({ success: true, message: 'Job dismissed' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/jobs/dashboard', requireDashboardAuth, async (req, res) => {
   try {
     const connectionId = req.query.connectionId ? parseInt(req.query.connectionId as string) : undefined;
@@ -434,10 +451,11 @@ app.get('/api/jobs/dashboard', requireDashboardAuth, async (req, res) => {
       .from(jobsTable)
       .where(
         connectionId 
-          ? sql`chat_id = 'DASHBOARD' AND status IN ('pending', 'processing', 'error') AND connection_id = ${connectionId}`
-          : sql`chat_id = 'DASHBOARD' AND status IN ('pending', 'processing', 'error')`
+          ? sql`connection_id = ${connectionId} AND (status IN ('pending', 'processing') OR (status = 'error' AND updated_at > NOW() - INTERVAL '24 hours'))`
+          : sql`status IN ('pending', 'processing') OR (status = 'error' AND updated_at > NOW() - INTERVAL '24 hours')`
       )
-      .orderBy(desc(jobsTable.createdAt));
+      .orderBy(desc(jobsTable.createdAt))
+      .limit(20);
     res.json(activeJobs);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -648,11 +666,10 @@ app.delete('/api/connections/:id', requireDashboardAuth, async (req, res) => {
 
 app.post('/api/queue', requireDashboardAuth, async (req, res) => {
   try {
-    const { connectionId, text, media, type, scheduledAt } = req.body;
+    const { connectionId, text, media, scheduledAt } = req.body;
     if (!connectionId) return res.status(400).json({ error: 'connectionId is required' });
     if (!text) return res.status(400).json({ error: 'text is required' });
     if (!media || !Array.isArray(media) || media.length === 0) return res.status(400).json({ error: 'media array is required' });
-    if (type !== 'post' && type !== 'reel') return res.status(400).json({ error: 'type must be post or reel' });
 
     const connection = await db.select().from(settingsTable).where(eq(settingsTable.id, connectionId));
     if (connection.length === 0) return res.status(404).json({ error: 'Connection not found' });
@@ -667,7 +684,7 @@ app.post('/api/queue', requireDashboardAuth, async (req, res) => {
 
     const publishMetadata = {
       [channelNetwork]: {
-        type: type === 'reel' ? 'reel' : 'post',
+        type: 'post',
         shouldShareToFeed: true
       }
     };
@@ -684,52 +701,6 @@ app.post('/api/queue', requireDashboardAuth, async (req, res) => {
     }).returning();
 
     res.json({ message: 'Added to queue successfully', item: result[0] });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/queue/batch', requireDashboardAuth, async (req, res) => {
-  try {
-    const { connectionId, items } = req.body;
-    if (!connectionId) return res.status(400).json({ error: 'connectionId is required' });
-    if (!items || !Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'items array is required' });
-
-    const connection = await db.select().from(settingsTable).where(eq(settingsTable.id, connectionId));
-    if (connection.length === 0) return res.status(404).json({ error: 'Connection not found' });
-    
-    const channelNetwork = connection[0].bufferChannelNetwork || 'instagram';
-
-    const maxSortResult = await db.select({ maxSort: sql`MAX(sort_order)` })
-      .from(queueTable)
-      .where(sql`connection_id = ${connectionId} AND status = 'pending'`);
-    let currentSortOrder = (maxSortResult[0]?.maxSort as number) || 0;
-
-    const valuesToInsert = items.map(item => {
-      currentSortOrder += 10;
-      
-      const publishMetadata = {
-        [channelNetwork]: {
-          type: item.type === 'reel' ? 'reel' : 'post',
-          shouldShareToFeed: true
-        }
-      };
-
-      return {
-        connectionId,
-        text: item.text,
-        media: item.media,
-        templateId: 'manual',
-        status: 'pending',
-        sortOrder: currentSortOrder,
-        publishMetadata,
-        scheduledAt: item.scheduledAt ? new Date(item.scheduledAt) : null
-      };
-    });
-
-    const result = await db.insert(queueTable).values(valuesToInsert).returning();
-
-    res.json({ message: `Added ${result.length} items to queue successfully`, items: result });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -875,27 +846,36 @@ app.post('/api/queue/:id/generate-slide-image', requireDashboardAuth, async (req
       templateData.coverImageUrl = generatedUrl;
     } else if (target === 'all') {
       const coverPrompt = templateData.image_prompt || templateData.title || 'dark geopolitical editorial background';
-      const coverRes = await imageGenerator({
-        prompt: coverPrompt,
-        style: 'dramatic',
-        aspectRatio: '4:5',
-        uploadToS3: true,
-      });
-      if (coverRes.url) {
-        templateData.coverImageUrl = coverRes.url;
-      }
-      if (Array.isArray(templateData.slides)) {
-        for (let i = 0; i < templateData.slides.length; i++) {
-          const slide = templateData.slides[i];
+      const slidesArray = Array.isArray(templateData.slides) ? templateData.slides : [];
+
+      const [coverRes, slideResList] = await Promise.all([
+        imageGenerator({
+          prompt: coverPrompt,
+          style: 'dramatic',
+          aspectRatio: '4:5',
+          uploadToS3: true,
+        }),
+        mapWithConcurrency(slidesArray, SLIDE_CONCURRENCY, async (slide: any) => {
           const sPrompt = slide.image_prompt || slide.title || 'dark geopolitical editorial photography';
-          const sRes = await imageGenerator({
+          return imageGenerator({
             prompt: sPrompt,
             style: 'dramatic',
             aspectRatio: '4:5',
             uploadToS3: true,
           });
-          if (sRes.url) {
+        })
+      ]);
+
+      if (!coverRes.isFallback && coverRes.url) {
+        templateData.coverImageUrl = coverRes.url;
+      }
+      if (Array.isArray(templateData.slides)) {
+        for (let i = 0; i < slideResList.length; i++) {
+          const sRes = slideResList[i];
+          if (!sRes.isFallback && sRes.url) {
             templateData.slides[i].slide_image = sRes.url;
+          } else if (templateData.coverImageUrl) {
+            templateData.slides[i].slide_image = templateData.coverImageUrl;
           }
         }
       }
@@ -1137,9 +1117,19 @@ app.post('/api/queue/:id/publish', requireDashboardAuth, async (req, res) => {
 
     const items = await db.select().from(queueTable).where(eq(queueTable.id, id));
     if (items.length === 0) return res.status(404).json({ error: 'Post not found in queue' });
-    
-    const post = items[0];
-    if (!post.connectionId) return res.status(400).json({ error: 'Post missing connectionId' });
+
+    const [post] = await db.update(queueTable)
+      .set({ status: 'publishing' })
+      .where(sql`${queueTable.id} = ${id} AND ${queueTable.status} IN ('pending', 'draft', 'error')`)
+      .returning();
+
+    if (!post) {
+      return res.status(409).json({ error: 'Post is already publishing, buffering, or published' });
+    }
+    if (!post.connectionId) {
+      await db.update(queueTable).set({ status: 'error', errorLog: 'Post missing connectionId' }).where(eq(queueTable.id, id));
+      return res.status(400).json({ error: 'Post missing connectionId' });
+    }
     
     try {
       const connection = await getConnection(post.connectionId);
@@ -1157,10 +1147,8 @@ app.post('/api/queue/:id/publish', requireDashboardAuth, async (req, res) => {
         .set({
           status: 'buffering',
           bufferPostId: result?.id || null,
-          publishedAt: new Date(),
         })
         .where(eq(queueTable.id, id));
-
       // Handle skipping upcoming slot/post if requested by user
       const { skipUpcomingSlot, upcomingPostId } = req.body || {};
       if (skipUpcomingSlot) {

@@ -31,12 +31,50 @@ const telegram = new Telegraf(botToken, {
 
 let isShuttingDown = false;
 let activeJobs = 0;
+let pollTimer: NodeJS.Timeout | null = null;
 const MAX_CONCURRENT_JOBS = 3;
+
+function scheduleIdlePoll(delayMs = 3000) {
+  if (isShuttingDown || pollTimer) return;
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    processNextJob();
+  }, delayMs);
+}
+
+async function recoverStaleStates() {
+  try {
+    const staleJobs = await db.execute(sql`
+      UPDATE jobs
+      SET status = 'pending', updated_at = NOW()
+      WHERE status = 'processing' AND updated_at < NOW() - INTERVAL '15 minutes'
+      RETURNING id;
+    `) as any[];
+    if (staleJobs.length > 0) {
+      console.warn(`[Worker] Recovered ${staleJobs.length} stale 'processing' job(s) back to 'pending'.`);
+    }
+
+    const stalePublishing = await db.execute(sql`
+      UPDATE queue
+      SET status = 'pending'
+      WHERE status = 'publishing' AND buffer_post_id IS NULL
+      RETURNING id;
+    `) as any[];
+    if (stalePublishing.length > 0) {
+      console.warn(`[Worker] Recovered ${stalePublishing.length} stale 'publishing' queue item(s) back to 'pending'.`);
+    }
+  } catch (err) {
+    console.error('[Worker] Failed to recover stale states:', err);
+  }
+}
 
 async function processNextJob() {
   if (isShuttingDown) return;
   if (activeJobs >= MAX_CONCURRENT_JOBS) return;
-
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
   let jobToProcess: any = null;
 
   try {
@@ -57,7 +95,7 @@ async function processNextJob() {
 
     if (rows.length === 0) {
       if (activeJobs === 0) {
-        setTimeout(processNextJob, 3000);
+        scheduleIdlePoll(3000);
       }
       return;
     }
@@ -74,7 +112,7 @@ async function processNextJob() {
   } catch (dbError) {
     console.error('[Worker] Error accessing database to claim job:', dbError);
     if (activeJobs === 0) {
-      setTimeout(processNextJob, 3000);
+      scheduleIdlePoll(3000);
     }
     return;
   }
@@ -133,6 +171,7 @@ async function processNextJob() {
 }
 
 console.log(`[Worker] Starting background worker (Concurrency: ${MAX_CONCURRENT_JOBS})...`);
+await recoverStaleStates();
 for (let i = 0; i < MAX_CONCURRENT_JOBS; i++) {
   setTimeout(processNextJob, i * 500);
 }
@@ -146,19 +185,36 @@ async function autoPublishQueue() {
     const connections = await getConnections();
     const now = new Date();
     
-    // Process custom scheduled posts FIRST
+    // Process custom scheduled posts AND retry-ready posts FIRST
     try {
       const scheduledPosts = await db.select()
         .from(queueTable)
-        .where(sql`status = 'pending' AND scheduled_at IS NOT NULL AND scheduled_at <= NOW()`);
+        .where(sql`
+          status = 'pending'
+          AND (
+            (scheduled_at IS NOT NULL AND scheduled_at <= NOW() AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+            OR (scheduled_at IS NULL AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
+          )
+        `)
+        .orderBy(asc(queueTable.sortOrder));
         
-      for (const post of scheduledPosts) {
-        if (!post.connectionId) continue;
+      for (const candidate of scheduledPosts) {
+        if (!candidate.connectionId) continue;
+
+        const [post] = await db.update(queueTable)
+          .set({ status: 'publishing' })
+          .where(sql`${queueTable.id} = ${candidate.id} AND ${queueTable.status} = 'pending'`)
+          .returning();
+
+        if (!post) continue;
         
-        console.log(`[Worker] Custom schedule reached for post ID ${post.id}. Publishing now...`);
+        console.log(`[Worker] Schedule/retry reached for post ID ${post.id}. Publishing now...`);
         const connection = connections.find(c => c.id === post.connectionId);
         if (!connection) {
            console.error(`[Worker] Connection ${post.connectionId} not found for scheduled post ${post.id}`);
+           await db.update(queueTable)
+             .set({ status: 'error', errorLog: `Connection ${post.connectionId} not found` })
+             .where(eq(queueTable.id, post.id));
            continue;
         }
 
@@ -178,8 +234,7 @@ async function autoPublishQueue() {
             })
             .where(eq(queueTable.id, post.id));
 
-          console.log(`[Worker] Sent scheduled post ID ${post.id} to Buffer (bufferPostId: ${bufferResult?.id}). Status is now buffering.`);
-          console.log(`[Worker] Successfully published scheduled post ID ${post.id}`);
+          console.log(`[Worker] Sent scheduled/retry post ID ${post.id} to Buffer (bufferPostId: ${bufferResult?.id}). Status is now buffering.`);
         } catch (publishError: any) {
           console.error(`[Worker] Failed to publish scheduled post ID ${post.id}:`, publishError);
           await db.update(queueTable)
@@ -190,7 +245,6 @@ async function autoPublishQueue() {
     } catch (scheduleErr) {
        console.error('[Worker] Error processing custom scheduled posts:', scheduleErr);
     }
-    
     // Now process regular auto-queue slots
     const formatter = new Intl.DateTimeFormat('en-US', { 
       weekday: 'long', 
@@ -222,15 +276,20 @@ async function autoPublishQueue() {
 
       console.log(`[Worker] Slot matched (${day} ${currentTimeStr}) for connection ${settings.id}. Checking queue for auto-publish...`);
       
-      const pendingPosts = await db.select()
+      const pendingCandidates = await db.select()
         .from(queueTable)
         .where(sql`status = 'pending' AND scheduled_at IS NULL AND connection_id = ${settings.id} AND (next_retry_at IS NULL OR next_retry_at <= NOW())`)
         .orderBy(asc(queueTable.sortOrder))
         .limit(1);
 
-      if (pendingPosts.length === 0) continue;
+      if (pendingCandidates.length === 0) continue;
 
-      const post = pendingPosts[0];
+      const [post] = await db.update(queueTable)
+        .set({ status: 'publishing' })
+        .where(sql`${queueTable.id} = ${pendingCandidates[0].id} AND ${queueTable.status} = 'pending'`)
+        .returning();
+
+      if (!post) continue;
       console.log(`[Worker] Auto-publishing post ID ${post.id}`);
 
       try {
@@ -252,8 +311,6 @@ async function autoPublishQueue() {
         await db.update(settingsTable).set({ lastAutoPublishAt: new Date() }).where(eq(settingsTable.id, settings.id));
 
         console.log(`[Worker] Sent auto-published post ID ${post.id} to Buffer (bufferPostId: ${bufferResult?.id}). Status is now buffering.`);
-        await db.update(settingsTable).set({ lastAutoPublishAt: new Date() }).where(eq(settingsTable.id, settings.id));
-
         console.log(`[Worker] Successfully auto-published post ID ${post.id}`);
       } catch (publishError: any) {
         console.error(`[Worker] Failed to auto-publish post ID ${post.id}:`, publishError);

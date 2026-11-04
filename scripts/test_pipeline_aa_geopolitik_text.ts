@@ -69,50 +69,27 @@ async function main() {
 
     console.log(`      -> Created Queue Post #${postId} (1 Cover + ${slides.length} Body Slides)`);
 
-    // 2. Generate Cover Image
-    console.log(`[2/4] Generating AI Cover Image for Post #${postId}...`);
-    const coverRes = await fetch(`${appUrl}/api/queue/${postId}/generate-slide-image`, {
+    // 2 & 3. Generate Cover + All Slide Images in Parallel via target: 'all'
+    console.log(`[2-3/4] Generating AI Cover + ${slides.length} Slide Background Images in parallel for Post #${postId}...`);
+    const allImgRes = await fetch(`${appUrl}/api/queue/${postId}/generate-slide-image`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${password}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        target: 'cover',
-        prompt: post.templateData?.image_prompt,
+        target: 'all',
         renderMedia: false
       })
     });
-    if (coverRes.ok) {
-      const cData: any = await coverRes.json();
-      console.log(`      -> Cover Image URL: ${cData.url}`);
-    } else {
-      console.warn(`      -> Cover Image warning: ${await coverRes.text()}`);
-    }
-
-    // 3. Generate Each Slide Image
-    console.log(`[3/4] Generating AI Background Images for ${slides.length} Body Slides...`);
-    for (let i = 0; i < slides.length; i++) {
-      console.log(`      -> Generating Slide ${i + 1}/${slides.length}: "${slides[i].title}"...`);
-      const sRes = await fetch(`${appUrl}/api/queue/${postId}/generate-slide-image`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${password}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          target: 'slide',
-          slideIndex: i,
-          prompt: slides[i].image_prompt,
-          renderMedia: false
-        })
+    if (allImgRes.ok) {
+      const allImgData: any = await allImgRes.json();
+      console.log(`      -> Cover Image URL: ${allImgData.templateData?.coverImageUrl}`);
+      (allImgData.templateData?.slides || []).forEach((s: any, idx: number) => {
+        console.log(`         Slide ${idx + 1} Image URL: ${s.slide_image}`);
       });
-      if (sRes.ok) {
-        const sData: any = await sRes.json();
-        console.log(`         Slide ${i + 1} Image URL: ${sData.url}`);
-      } else {
-        console.warn(`         Slide ${i + 1} warning: ${await sRes.text()}`);
-      }
+    } else {
+      console.warn(`      -> Parallel Image Generation warning: ${await allImgRes.text()}`);
     }
 
     // 4. Render Final 1080x1350 Carousel PNGs via Production Media Renderer

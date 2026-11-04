@@ -1,6 +1,6 @@
 import { generateObject, generateText } from 'ai';
 import { z } from 'zod';
-import { PipelineContext, ResearchResult, googleAI, withRetry } from '../../../../utils.js';
+import { PipelineContext, ResearchResult, googleAI, withRetry, mapWithConcurrency, SLIDE_CONCURRENCY } from '../../../../utils.js';
 import { censorText } from '../../../../sanitize.js';
 import { uploadToS3 } from '../../../../s3.js';
 import { generateMedia } from '../../../../media.js';
@@ -157,7 +157,7 @@ export const carouselAnalysisTemplateConfig = {
   ] as any[]
 };
 
-export async function generateCarouselAnalysisMedia(templateData: any, settings: any): Promise<{ type: 'image' | 'video', url: string }[]> {
+export async function generateCarouselAnalysisMedia(templateData: any, settings: any): Promise<{ type: 'image', url: string }[]> {
   const pages: any[] = [];
   
   pages.push({
@@ -286,45 +286,21 @@ export async function runCarouselAnalysisPipeline(
 
   let extraImageUrls: string[] = [];
   if (isAlbum && carouselAnalysisTemplateConfig.albumStrategy === 'all_as_slides') {
-    for (const item of imageMediaItems.slice(1)) {
-      if (item.buffer) {
-        const url = await uploadToS3(item.buffer, item.mimeType || 'image/jpeg', item.mimeType === 'image/png' ? '.png' : '.jpg');
-        if (url) extraImageUrls.push(url);
+    const uploadedAlbumUrls = await mapWithConcurrency(
+      imageMediaItems.slice(1),
+      SLIDE_CONCURRENCY,
+      async (item) => {
+        if (!item.buffer) return null;
+        return uploadToS3(item.buffer, item.mimeType || 'image/jpeg', item.mimeType === 'image/png' ? '.png' : '.jpg');
       }
-    }
-  }
-  // Phase 2.5: Auto Generate Contextual Images for Each Slide
-  await notifyStatus('🖼️ Menghasilkan visual latar untuk setiap slide...');
-  console.log(`[Phase 2.5] Generating atmospheric visual backgrounds for ${contentParams.slides.length} slides...`);
-  
-  const slideImages: string[] = [];
-  for (let i = 0; i < contentParams.slides.length; i++) {
-    const slide = contentParams.slides[i];
-    if (extraImageUrls[i]) {
-      slideImages.push(extraImageUrls[i]);
-      continue;
-    }
-
-    const slidePrompt = slide.image_prompt || `${slide.title} geopolitical documentary photography, atmospheric dark lighting, high contrast chiaroscuro, cinematic void background`;
-    try {
-      console.log(`[Phase 2.5] Generating image for slide ${i + 1}: "${slidePrompt}"`);
-      const slideResult = await imageGenerator({
-        prompt: slidePrompt,
-        style: 'dramatic',
-        aspectRatio: '4:5',
-        uploadToS3: true,
-      });
-      slideImages.push(slideResult.url || coverImageUrl);
-    } catch (slideErr) {
-      console.warn(`[Phase 2.5] Failed to generate image for slide ${i + 1}, using cover fallback:`, slideErr);
-      slideImages.push(coverImageUrl);
-    }
+    );
+    extraImageUrls = uploadedAlbumUrls.filter((u): u is string => Boolean(u));
   }
 
+  // Phase 2.5 & Phase 3 (Concurrent): Auto Generate Slide Backgrounds + Text Highlighting
+  await notifyStatus('🖼️ Menghasilkan visual latar & highlight teks untuk setiap slide...');
+  console.log(`[Phase 2.5 & 3] Generating ${contentParams.slides.length} slide backgrounds (concurrency=${SLIDE_CONCURRENCY}) & text highlights in parallel...`);
 
-  // Phase 3: Highlight Enhancement
-  await notifyStatus('✨ Menambahkan highlight teks...');
-  
   const highlightText = async (text: string) => {
     try {
       const { text: boldedText } = await generateText({
@@ -342,14 +318,36 @@ RULES:
     }
   };
 
-  const enhancedSlides = await Promise.all(contentParams.slides.map(async (slide, idx) => {
-    const alreadyHighlighted = slide.text.includes('**') || slide.text.includes('<strong>');
-    const bolded = alreadyHighlighted ? slide.text : await highlightText(slide.text);
-    return {
-      ...slide,
-      text: censorText(bolded, bannedWords),
-      slide_image: slideImages[idx] || coverImageUrl
-    };
+  const [slideImages, boldedTexts] = await Promise.all([
+    mapWithConcurrency(contentParams.slides, SLIDE_CONCURRENCY, async (slide, i) => {
+      if (extraImageUrls[i]) {
+        return extraImageUrls[i];
+      }
+      const slidePrompt = slide.image_prompt || `${slide.title} geopolitical documentary photography, atmospheric dark lighting, high contrast chiaroscuro, cinematic void background`;
+      try {
+        console.log(`[Phase 2.5] Generating image for slide ${i + 1}: "${slidePrompt}"`);
+        const slideResult = await imageGenerator({
+          prompt: slidePrompt,
+          style: 'dramatic',
+          aspectRatio: '4:5',
+          uploadToS3: true,
+        });
+        return (!slideResult.isFallback && slideResult.url) ? slideResult.url : coverImageUrl;
+      } catch (slideErr) {
+        console.warn(`[Phase 2.5] Failed to generate image for slide ${i + 1}, using cover fallback:`, slideErr);
+        return coverImageUrl;
+      }
+    }),
+    Promise.all(contentParams.slides.map(async (slide) => {
+      const alreadyHighlighted = slide.text.includes('**') || slide.text.includes('<strong>');
+      return alreadyHighlighted ? slide.text : await highlightText(slide.text);
+    }))
+  ]);
+
+  const enhancedSlides = contentParams.slides.map((slide, idx) => ({
+    ...slide,
+    text: censorText(boldedTexts[idx], bannedWords),
+    slide_image: slideImages[idx] || coverImageUrl
   }));
 
   const templateData: any = {

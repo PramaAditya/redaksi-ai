@@ -20,6 +20,29 @@ export const withRetry = async <T>(fn: () => Promise<T>, retries = 3, delayMs = 
   throw new Error("Unreachable");
 };
 
+export const SLIDE_CONCURRENCY = parseInt(process.env.SLIDE_CONCURRENCY || '4', 10);
+
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
 export const getBaseSystemPrompt = (currentDateStr: string, currentYear: number) => `You are a strict, automated editorial assistant crafting news based content for social media.
 You operate entirely in BAHASA INDONESIA. Your tone should be highly informative, objective, and strictly journalistic.
 
@@ -30,7 +53,7 @@ You MUST use the year ${currentYear} (and the current month if needed) in your w
 `;
 
 export interface MediaItem {
-  type: 'image' | 'video';
+  type: 'image';
   url: string;
   mimeType?: string;
   buffer?: Buffer;

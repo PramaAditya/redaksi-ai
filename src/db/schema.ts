@@ -29,7 +29,7 @@ export const queueTable = pgTable('queue', {
   templateId: text('template_id').notNull().default('image:poros.perjuangan:carousel_dark'),
   templateData: jsonb('template_data').$type<any>().notNull().default({}),
   text: text('text').notNull(),
-  media: jsonb('media').$type<{ type: 'image' | 'video', url: string }[]>().notNull(),
+  media: jsonb('media').$type<{ type: 'image', url: string }[]>().notNull(),
   publishMetadata: jsonb('publish_metadata').$type<any>().notNull().default({}),
   status: text('status').notNull().default('pending'), // pending, publishing, buffering, published, error
   chatId: text('chat_id'),
@@ -53,7 +53,7 @@ export const ideasTable = pgTable('ideas', {
   chatId: text('chat_id').notNull(),
   messageId: bigint('message_id', { mode: 'number' }).notNull(),
   text: text('text').notNull(),
-  media: jsonb('media').$type<{ type: 'image' | 'video', url: string, mimeType?: string }[]>().default([]).notNull(),
+  media: jsonb('media').$type<{ type: 'image', url: string, mimeType?: string }[]>().default([]).notNull(),
   status: text('status').notNull().default('pending'), // pending, converted, rejected
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
@@ -66,7 +66,7 @@ export const jobsTable = pgTable('jobs', {
   templateId: text('template_id').notNull().default('image:poros.perjuangan:carousel_dark'),
   heroStyle: text('hero_style').default('Dark-Dramatize'),
   text: text('text').notNull(),
-  media: jsonb('media').$type<{ type: 'image' | 'video', url: string, mimeType?: string }[]>().default([]).notNull(),
+  media: jsonb('media').$type<{ type: 'image', url: string, mimeType?: string }[]>().default([]).notNull(),
   status: text('status').notNull().default('pending'), // pending, processing, completed, error
   errorLog: text('error_log'),
   createdAt: timestamp('created_at').notNull().defaultNow(),

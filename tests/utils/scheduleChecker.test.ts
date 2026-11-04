@@ -104,4 +104,33 @@ describe('Schedule Checker: checkUpcomingSchedule', () => {
     expect(result.upcomingPostId).toBe(15);
     expect(result.upcomingPostTitle).toBe('Auto slot pending post');
   });
+
+  it('should detect auto-slot across midnight rollover (e.g. 23:30 WIB to 00:15 WIB next day)', async () => {
+    // Wednesday 23:30 WIB = 2026-09-16T16:30:00.000Z
+    const refTime = new Date('2026-09-16T16:30:00.000Z');
+    mockGetConnection.mockResolvedValueOnce({
+      id: 1,
+      postingSlots: [{ day: 'Thursday', time: '00:15' }],
+    });
+
+    mockDb.limit.mockResolvedValueOnce([{ id: 10, connectionId: 1, status: 'pending' }]);
+    mockDb.limit.mockResolvedValueOnce([]);
+    mockDb.limit.mockResolvedValueOnce([
+      { id: 19, connectionId: 1, status: 'pending', text: 'Midnight rollover post' }
+    ]);
+
+    const result = await checkUpcomingSchedule({
+      db: mockDb,
+      postId: 10,
+      getConnectionFn: mockGetConnection,
+      referenceTime: refTime,
+    });
+
+    expect(result.hasUpcoming).toBe(true);
+    expect(result.type).toBe('auto_slot');
+    expect(result.minutesRemaining).toBe(45);
+    expect(result.timeStr).toBe('00:15');
+    expect(result.upcomingSlotDay).toBe('Thursday');
+    expect(result.upcomingPostId).toBe(19);
+  });
 });

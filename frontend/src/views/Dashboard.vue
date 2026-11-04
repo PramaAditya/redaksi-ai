@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import { Edit, Send, GripVertical, RotateCcw, MoreVertical, Copy, Loader2, ExternalLink } from "lucide-vue-next";
+import { ref, watch, onMounted, onUnmounted } from "vue";
+import { Edit, Send, GripVertical, RotateCcw, MoreVertical, Copy, Loader2, ExternalLink, Sparkles, AlertCircle, X } from "lucide-vue-next";
 import { getAuthHeaders, setPassword } from "../auth";
 import { Fancybox } from "@fancyapps/ui";
 import draggable from "vuedraggable";
@@ -15,7 +15,10 @@ const postingSlots = ref<{day: string, time: string}[]>([]);
 const loading = ref(true);
 const error = ref("");
 const activeTab = ref('pending');
-
+const activeJobs = ref<any[]>([]);
+const retryingJobId = ref<number | null>(null);
+let jobsPollTimer: any = null;
+let trackedInFlightJobIds = new Set<number>();
 const isScheduleModalOpen = ref(false);
 const scheduleModalItemId = ref<number | null>(null);
 const scheduleModalDate = ref("");
@@ -92,7 +95,7 @@ const onTabChange = (value: number | string) => {
 const openLightbox = (mediaArray: any[], index: number) => {
   const items = mediaArray.map((m) => ({
     src: m.url,
-    type: m.type === "video" ? "html5video" : "image",
+    type: "image",
   }));
   Fancybox.show(items, { startIndex: index });
 };
@@ -184,8 +187,8 @@ const fetchSettings = async () => {
   } catch (e) {}
 };
 
-const fetchQueue = async () => {
-  loading.value = true;
+const fetchQueue = async (silent = false) => {
+  if (!silent) loading.value = true;
   try {
     let url = `/api/queue?status=${activeTab.value}`;
     if (connectionStore.activeConnectionId) {
@@ -221,8 +224,77 @@ const fetchQueue = async () => {
   } catch (err: any) {
     error.value = err.message;
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
+};
+
+const fetchActiveJobs = async () => {
+  if (!connectionStore.activeConnectionId) {
+    activeJobs.value = [];
+    trackedInFlightJobIds.clear();
+    return;
+  }
+  try {
+    const res = await fetch(`/api/jobs/dashboard?connectionId=${connectionStore.activeConnectionId}`, {
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) return;
+    const jobs: any[] = await res.json();
+    const currentInFlightIds = new Set<number>(
+      jobs.filter(j => j.status === 'pending' || j.status === 'processing').map(j => j.id)
+    );
+    const errorIds = new Set<number>(
+      jobs.filter(j => j.status === 'error').map(j => j.id)
+    );
+
+    let completedCount = 0;
+    for (const prevId of trackedInFlightJobIds) {
+      if (!currentInFlightIds.has(prevId) && !errorIds.has(prevId)) {
+        completedCount++;
+      }
+    }
+
+    trackedInFlightJobIds = currentInFlightIds;
+    activeJobs.value = jobs;
+
+    if (completedCount > 0) {
+      toast.add({
+        title: '🎉 Carousel Ready!',
+        description: `${completedCount} background job(s) finished and added to your queue.`,
+        color: 'success'
+      });
+      fetchQueue(true);
+    }
+  } catch (e) {}
+};
+
+const retryJobFromBanner = async (jobId: number) => {
+  retryingJobId.value = jobId;
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/retry`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    if (res.ok) {
+      toast.add({ title: 'Job queued for retry', color: 'success' });
+      await fetchActiveJobs();
+    }
+  } catch (e) {
+  } finally {
+    retryingJobId.value = null;
+  }
+};
+
+const dismissJobFromBanner = async (jobId: number) => {
+  try {
+    const res = await fetch(`/api/jobs/${jobId}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
+    if (res.ok) {
+      activeJobs.value = activeJobs.value.filter(j => j.id !== jobId);
+    }
+  } catch (e) {}
 };
 
 const syncReorder = async () => {
@@ -252,9 +324,19 @@ const onDragEnd = async () => {
 };
 
 watch(() => connectionStore.activeConnectionId, () => {
+  trackedInFlightJobIds.clear();
   fetchQueue();
   fetchSettings();
+  fetchActiveJobs();
 }, { immediate: true });
+
+onMounted(() => {
+  jobsPollTimer = setInterval(fetchActiveJobs, 4000);
+});
+
+onUnmounted(() => {
+  if (jobsPollTimer) clearInterval(jobsPollTimer);
+});
 
 const jumpToPosition = async (currentIndex: number, event: Event) => {
   const target = event.target as HTMLInputElement;
@@ -533,7 +615,7 @@ const getPostDropdownItems = (item: any) => {
           Create New
         </UButton>
         <UButton
-          @click="fetchQueue"
+          @click="() => { fetchQueue(); fetchActiveJobs(); }"
           color="primary"
           variant="solid"
           size="md"
@@ -543,7 +625,73 @@ const getPostDropdownItems = (item: any) => {
       </div>
     </div>
 
-    <!-- Tabs -->
+    <!-- Live Background Jobs Banner -->
+    <div v-if="activeJobs.length > 0 && connectionStore.activeConnectionId" class="mb-6 space-y-2.5">
+      <div
+        v-for="job in activeJobs"
+        :key="job.id"
+        class="rounded-xl border px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition shadow-xs"
+        :class="
+          job.status === 'processing'
+            ? 'bg-primary/8 border-primary/40 ring-1 ring-primary/20'
+            : job.status === 'pending'
+              ? 'bg-amber-500/8 border-amber-500/30'
+              : 'bg-red-500/8 border-red-500/30'
+        "
+      >
+        <div class="flex items-start sm:items-center gap-3 min-w-0">
+          <div class="mt-0.5 sm:mt-0 shrink-0">
+            <Loader2 v-if="job.status === 'processing'" class="w-5 h-5 text-primary animate-spin" />
+            <Sparkles v-else-if="job.status === 'pending'" class="w-5 h-5 text-amber-500 animate-pulse" />
+            <AlertCircle v-else class="w-5 h-5 text-red-500" />
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span
+                class="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full"
+                :class="
+                  job.status === 'processing'
+                    ? 'bg-primary text-inverted'
+                    : job.status === 'pending'
+                      ? 'bg-amber-500/20 text-amber-500 border border-amber-500/30'
+                      : 'bg-red-500/20 text-red-500 border border-red-500/30'
+                "
+              >
+                {{ job.status === 'processing' ? 'Generating Carousel...' : job.status === 'pending' ? 'Queued in Worker' : 'Generation Failed' }}
+              </span>
+              <span class="text-xs text-muted font-mono">
+                #{{ job.id }} · {{ job.chatId === 'DASHBOARD' ? 'Web CMS' : job.chatId === 'OMP_EXTENSION' ? 'OMP Agent' : 'Telegram' }}
+              </span>
+              <span class="text-xs text-muted">· {{ timeAgo(job.createdAt) }}</span>
+            </div>
+            <p class="text-sm font-medium text-default line-clamp-1 mt-1">{{ job.text }}</p>
+            <p v-if="job.status === 'error' && job.errorLog" class="text-xs text-red-500 mt-1 line-clamp-2">
+              {{ job.errorLog }}
+            </p>
+          </div>
+        </div>
+
+        <div v-if="job.status === 'error'" class="flex items-center gap-2 shrink-0 self-end sm:self-center">
+          <button
+            type="button"
+            @click="retryJobFromBanner(job.id)"
+            :disabled="retryingJobId === job.id"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md bg-default border border-default text-default hover:bg-muted disabled:opacity-50 cursor-pointer"
+          >
+            <RotateCcw class="w-3.5 h-3.5" :class="{ 'animate-spin': retryingJobId === job.id }" />
+            Retry
+          </button>
+          <button
+            type="button"
+            @click="dismissJobFromBanner(job.id)"
+            class="p-1.5 rounded-md text-muted hover:text-default hover:bg-muted cursor-pointer"
+            title="Dismiss error"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
     <UTabs 
       v-model="activeTab"
       :items="tabItems" 
@@ -619,8 +767,7 @@ const getPostDropdownItems = (item: any) => {
                                 'col-span-1 row-span-1': (qItem as any).media.length >= 3,
                               }"
                             >
-                              <img v-if="(m as any).type === 'image'" :src="(m as any).url" class="w-full h-full object-cover" />
-                              <video v-else :src="`${(m as any).url}#t=0.1`" class="w-full h-full object-cover pointer-events-none" preload="metadata" muted playsinline></video>
+                              <img :src="(m as any).url" class="w-full h-full object-cover" />
                               
                               <div v-if="i === 3 && (qItem as any).media.length > 4" class="absolute inset-0 bg-black/60 flex items-center justify-center">
                                 <span class="text-white font-medium text-xl">+{{ (qItem as any).media.length - 4 }}</span>
@@ -736,8 +883,7 @@ const getPostDropdownItems = (item: any) => {
                                 'col-span-1 row-span-1': qItem.media.length >= 3,
                               }"
                             >
-                              <img v-if="m.type === 'image'" :src="m.url" class="w-full h-full object-cover" />
-                              <video v-else :src="`${m.url}#t=0.1`" class="w-full h-full object-cover pointer-events-none" preload="metadata" muted playsinline></video>
+                              <img :src="m.url" class="w-full h-full object-cover" />
                               
                               <div v-if="i === 3 && qItem.media.length > 4" class="absolute inset-0 bg-black/60 flex items-center justify-center">
                                 <span class="text-white font-medium text-xl">+{{ qItem.media.length - 4 }}</span>
@@ -817,8 +963,7 @@ const getPostDropdownItems = (item: any) => {
                                 'col-span-1 row-span-1': (qItem as any).media.length >= 3,
                               }"
                             >
-                              <img v-if="(m as any).type === 'image'" :src="(m as any).url" class="w-full h-full object-cover" />
-                              <video v-else :src="`${(m as any).url}#t=0.1`" class="w-full h-full object-cover pointer-events-none" preload="metadata" muted playsinline></video>
+                              <img :src="(m as any).url" class="w-full h-full object-cover" />
                               
                               <div v-if="i === 3 && (qItem as any).media.length > 4" class="absolute inset-0 bg-black/60 flex items-center justify-center">
                                 <span class="text-white font-medium text-xl">+{{ (qItem as any).media.length - 4 }}</span>

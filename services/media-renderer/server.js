@@ -6,7 +6,7 @@ const Handlebars = require('handlebars');
 const moment = require('moment-timezone');
 
 let marked;
-import('marked').then(module => {
+const markedReadyPromise = import('marked').then(module => {
   marked = module.marked;
   
   Handlebars.registerHelper('markdown', function (options) {
@@ -37,18 +37,41 @@ const s3Client = new S3Client({
   forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
 });
 
-// Helper to launch puppeteer
+// Singleton warm Puppeteer browser pool
+let sharedBrowser = null;
+let browserLaunchPromise = null;
+
 async function getBrowser() {
-  return await puppeteer.launch({
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  if (sharedBrowser && sharedBrowser.connected) {
+    return sharedBrowser;
+  }
+  if (browserLaunchPromise) {
+    return browserLaunchPromise;
+  }
+  browserLaunchPromise = puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
+  }).then(browser => {
+    sharedBrowser = browser;
+    browserLaunchPromise = null;
+    browser.on('disconnected', () => {
+      if (sharedBrowser === browser) {
+        sharedBrowser = null;
+      }
+    });
+    return browser;
+  }).catch(err => {
+    browserLaunchPromise = null;
+    throw err;
   });
+  return browserLaunchPromise;
 }
 
 // 1. Original /render endpoint
 app.post('/render', async (req, res) => {
-  let browser;
+  let page;
   try {
+    await markedReadyPromise;
     const { viewport, html, css } = req.body;
     
     if (!html) {
@@ -58,15 +81,14 @@ app.post('/render', async (req, res) => {
     const width = parseInt(viewport?.width, 10) || 1200;
     const height = parseInt(viewport?.height, 10) || 630;
 
-    browser = await getBrowser();
-    const page = await browser.newPage();
+    const browser = await getBrowser();
+    page = await browser.newPage();
     await page.setViewport({ width, height });
 
     const pendingRequests = new Set();
-    page.on('request', request => pendingRequests.add(request.url()));
-    page.on('requestfinished', request => pendingRequests.delete(request.url()));
-    page.on('requestfailed', request => pendingRequests.delete(request.url()));
-
+    page.on('request', request => pendingRequests.add(request));
+    page.on('requestfinished', request => pendingRequests.delete(request));
+    page.on('requestfailed', request => pendingRequests.delete(request));
     const fullHtml = `
       <!DOCTYPE html>
       <html lang="en">
@@ -93,7 +115,7 @@ app.post('/render', async (req, res) => {
       });
     } catch (e) {
       console.warn('Timeout waiting for networkidle0, proceeding with screenshot anyway.');
-      console.warn('Pending requests:', Array.from(pendingRequests));
+      console.warn('Pending requests:', Array.from(pendingRequests).map(r => r.url()));
     }
 
     const imageBuffer = await page.screenshot({ type: 'png', omitBackground: true });
@@ -104,8 +126,8 @@ app.post('/render', async (req, res) => {
     console.error('Rendering error:', error);
     res.status(500).json({ error: 'Failed to render image', details: error.message });
   } finally {
-    if (browser) {
-      await browser.close();
+    if (page) {
+      await page.close().catch(() => {});
     }
   }
 });
@@ -143,15 +165,16 @@ const compileTemplate = (templateName) => {
 
 // Helper to render HTML to image buffer
 async function renderHtmlToBuffer(htmlContent, width, height) {
+  await markedReadyPromise;
   const browser = await getBrowser();
+  const page = await browser.newPage();
   try {
-    const page = await browser.newPage();
     await page.setViewport({ width, height });
 
     const pendingRequests = new Set();
-    page.on('request', request => pendingRequests.add(request.url()));
-    page.on('requestfinished', request => pendingRequests.delete(request.url()));
-    page.on('requestfailed', request => pendingRequests.delete(request.url()));
+    page.on('request', request => pendingRequests.add(request));
+    page.on('requestfinished', request => pendingRequests.delete(request));
+    page.on('requestfailed', request => pendingRequests.delete(request));
 
     try {
       await page.setContent(htmlContent, {
@@ -160,12 +183,13 @@ async function renderHtmlToBuffer(htmlContent, width, height) {
       });
     } catch (e) {
       console.warn('Timeout waiting for networkidle0, proceeding with screenshot anyway.');
+      console.warn('Pending requests:', Array.from(pendingRequests).map(r => r.url()));
     }
 
     const imageBuffer = await page.screenshot({ type: 'png', omitBackground: true });
     return imageBuffer;
   } finally {
-    await browser.close();
+    await page.close().catch(() => {});
   }
 }
 
@@ -199,6 +223,7 @@ app.post('/render/:mediaType/:brand/:templateName', async (req, res) => {
   const templateBasePath = `${mediaType}/${brand}/${templateName}`;
 
   try {
+    await markedReadyPromise;
     const { pages, viewport } = req.body;
 
     if (!pages || !Array.isArray(pages)) {
@@ -208,24 +233,29 @@ app.post('/render/:mediaType/:brand/:templateName', async (req, res) => {
     const width = parseInt(viewport?.width, 10) || 1080;
     const height = parseInt(viewport?.height, 10) || 1350;
 
-    const imageUrls = [];
+    const RENDER_CONCURRENCY = Math.max(1, parseInt(process.env.RENDER_CONCURRENCY || '4', 10));
+    const imageUrls = new Array(pages.length);
+    let nextPageIndex = 0;
+    const workerCount = Math.min(RENDER_CONCURRENCY, pages.length);
 
-    for (let i = 0; i < pages.length; i++) {
-      const page = pages[i];
-      const templateFile = page.file;
-      const context = page.context || {};
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (nextPageIndex < pages.length) {
+        const i = nextPageIndex++;
+        const page = pages[i];
+        const templateFile = page.file;
+        const context = page.context || {};
 
-      const compiledTemplate = compileTemplate(`${templateBasePath}/${templateFile}`);
-      const htmlContent = compiledTemplate(context)
-        .replace(/https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/textfit\/2\.4\.0\/textFit\.min\.js/g, `http://localhost:${port}/textFit.min.js`);
+        const compiledTemplate = compileTemplate(`${templateBasePath}/${templateFile}`);
+        const htmlContent = compiledTemplate(context)
+          .replace(/https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/textfit\/2\.4\.0\/textFit\.min\.js/g, `http://localhost:${port}/textFit.min.js`);
 
-      const imageBuffer = await renderHtmlToBuffer(htmlContent, width, height);
-      
-      const filename = `${brand}-${templateName}-${templateFile}-${i+1}-${uuidv4()}.png`;
-      const url = await uploadToS3(imageBuffer, filename);
-      imageUrls.push(url);
-    }
+        const imageBuffer = await renderHtmlToBuffer(htmlContent, width, height);
+        const filename = `${brand}-${templateName}-${templateFile}-${i+1}-${uuidv4()}.png`;
+        imageUrls[i] = await uploadToS3(imageBuffer, filename);
+      }
+    });
 
+    await Promise.all(workers);
     return res.json({ urls: imageUrls });
 
   } catch (error) {
@@ -234,6 +264,8 @@ app.post('/render/:mediaType/:brand/:templateName', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+markedReadyPromise.then(() => {
+  app.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
+  });
 });

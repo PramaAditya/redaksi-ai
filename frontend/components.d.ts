@@ -14,6 +14,7 @@ declare module 'vue' {
     AiTextarea: typeof import('./src/components/AiTextarea.vue')['default']
     HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
     ImageUploader: typeof import('./src/components/ImageUploader.vue')['default']
+    LiveSlidePreview: typeof import('./src/components/LiveSlidePreview.vue')['default']
     PasswordInput: typeof import('./src/components/PasswordInput.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

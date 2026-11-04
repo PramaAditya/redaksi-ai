@@ -3,6 +3,8 @@ import FirecrawlApp from '@mendable/firecrawl-js';
 class FirecrawlService {
   private keys: string[];
   private currentKeyIndex: number = 0;
+  private cooldownUntil: Map<number, number> = new Map();
+  private readonly cooldownMs: number = 60_000;
   private app: FirecrawlApp;
 
   constructor() {
@@ -27,12 +29,27 @@ class FirecrawlService {
     return new FirecrawlApp({ apiKey });
   }
 
-  private rotateKey(): boolean {
-    if (this.currentKeyIndex < this.keys.length - 1) {
-      this.currentKeyIndex++;
-      console.log(`[FirecrawlService] Rotating to API key index ${this.currentKeyIndex}`);
-      this.app = this.createAppInstance();
+  private rotateKey(failedKeyIndex: number = this.currentKeyIndex): boolean {
+    if (this.keys.length <= 1) return false;
+
+    const now = Date.now();
+    this.cooldownUntil.set(failedKeyIndex, now + this.cooldownMs);
+
+    if (
+      this.currentKeyIndex !== failedKeyIndex &&
+      (this.cooldownUntil.get(this.currentKeyIndex) || 0) <= now
+    ) {
       return true;
+    }
+
+    for (let offset = 1; offset <= this.keys.length; offset++) {
+      const candidate = (failedKeyIndex + offset) % this.keys.length;
+      if (candidate !== failedKeyIndex && (this.cooldownUntil.get(candidate) || 0) <= now) {
+        this.currentKeyIndex = candidate;
+        console.log(`[FirecrawlService] Rotating to API key index ${this.currentKeyIndex}`);
+        this.app = this.createAppInstance();
+        return true;
+      }
     }
     return false;
   }
@@ -51,14 +68,15 @@ class FirecrawlService {
    * Wrapper for FirecrawlApp.search with automatic key rotation
    */
   public async search(query: string, params?: any): Promise<any> {
+    const keyIndexAtStart = this.currentKeyIndex;
     try {
       return await this.app.search(query, params);
     } catch (error: any) {
       if (this.isCreditOrQuotaError(error)) {
         const status = error?.response?.status || error?.statusCode || error?.status;
-        console.warn(`[FirecrawlService] Search failed with status ${status}. Key index: ${this.currentKeyIndex}`);
+        console.warn(`[FirecrawlService] Search failed with status ${status}. Key index: ${keyIndexAtStart}`);
         
-        if (this.rotateKey()) {
+        if (this.rotateKey(keyIndexAtStart)) {
           console.log(`[FirecrawlService] Retrying search with new key...`);
           return this.search(query, params); // Recursively retry with the next key
         } else {
@@ -74,14 +92,15 @@ class FirecrawlService {
    * Wrapper for FirecrawlApp.scrape with automatic key rotation
    */
   public async scrape(url: string, params?: any): Promise<any> {
+    const keyIndexAtStart = this.currentKeyIndex;
     try {
       return await this.app.scrape(url, params);
     } catch (error: any) {
       if (this.isCreditOrQuotaError(error)) {
         const status = error?.response?.status || error?.statusCode || error?.status;
-        console.warn(`[FirecrawlService] Scrape failed with status ${status}. Key index: ${this.currentKeyIndex}`);
+        console.warn(`[FirecrawlService] Scrape failed with status ${status}. Key index: ${keyIndexAtStart}`);
         
-        if (this.rotateKey()) {
+        if (this.rotateKey(keyIndexAtStart)) {
           console.log(`[FirecrawlService] Retrying scrape with new key...`);
           return this.scrape(url, params); // Recursively retry with the next key
         } else {

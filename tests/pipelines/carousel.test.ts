@@ -10,13 +10,14 @@ import {
   carouselMultiImagesTemplateConfig,
 } from '../../src/agents/pipelines/image/poros.perjuangan/carousel_multi_images.js';
 import { generateObject, generateText } from 'ai';
-import { imageEditor } from '../../src/utils/imageEditor/index.js';
+import { imageEditor, imageGenerator } from '../../src/utils/imageEditor/index.js';
 import {
   runSinglePagePipeline,
   generateSinglePageMedia,
   singlePageTemplateConfig,
 } from '../../src/agents/pipelines/image/poros.perjuangan/single_page.js';
 import {
+  runCarouselAnalysisPipeline,
   carouselAnalysisTemplateConfig,
   generateCarouselAnalysisMedia,
   isStructuredSlideScript,
@@ -589,6 +590,70 @@ describe('Carousel Pipelines Workflow Tests', () => {
       expect(isStructuredSlideScript(scriptInput)).toBe(true);
       expect(isStructuredSlideScript('https://example.com/news-article')).toBe(false);
       expect(isStructuredSlideScript('Analisis geopolitik Laut Merah dan Yaman')).toBe(false);
+    });
+
+    it('executes runCarouselAnalysisPipeline with parallel slide image generation and cover fallback on 1x1 black pixel', async () => {
+      vi.mocked(generateObject).mockResolvedValueOnce({
+        object: {
+          title: 'LAUT MERAH **MEMANAS**',
+          subtitle: 'Siapa yang Mengendalikan Jalur Logistik?',
+          slides: [
+            { type: 'opinion', title: 'SLIDE **SATU**', text: 'Isi slide pertama belum bold.', image_prompt: 'Prompt 1' },
+            { type: 'opinion', title: 'SLIDE **DUA**', text: 'Isi slide **kedua** sudah bold.', image_prompt: 'Prompt 2' },
+          ],
+          source_name: 'Reuters',
+          source_url: 'https://reuters.com/world/middle-east',
+          image_prompt: 'Cover dramatic prompt',
+        },
+      } as any);
+
+      // Slide 1 succeeds, Slide 2 returns isFallback: true (1x1 black pixel) -> should fall back to coverImageUrl
+      vi.mocked(imageGenerator)
+        .mockResolvedValueOnce({
+          url: 'https://mock-s3.pelita.tech/slide-1-bg.jpg',
+          buffer: Buffer.from('s1'),
+          mediaType: 'image/jpeg',
+          isFallback: false,
+        })
+        .mockResolvedValueOnce({
+          url: 'https://mock-s3.pelita.tech/black-1x1.png',
+          buffer: Buffer.from('s2'),
+          mediaType: 'image/png',
+          isFallback: true,
+        });
+
+      vi.mocked(generateText).mockResolvedValueOnce({
+        text: 'Isi slide **pertama** belum bold.',
+      } as any);
+
+      vi.mocked(media.generateMedia).mockResolvedValueOnce([
+        'https://renderer.pelita.tech/aa_cover.png',
+        'https://renderer.pelita.tech/aa_s1.png',
+        'https://renderer.pelita.tech/aa_s2.png',
+      ]);
+
+      vi.mocked(queue.insertQueueItem).mockResolvedValueOnce([{ id: 42 }] as any);
+
+      await runCarouselAnalysisPipeline(mockContext, mockResearch, { research: 'Fakta riset', opinion: 'Tesis opini' });
+
+      expect(imageGenerator).toHaveBeenCalledTimes(2);
+      expect(queue.insertQueueItem).toHaveBeenCalledWith(
+        expect.objectContaining({
+          templateId: 'image:aa.geopolitik:carousel_analysis',
+          templateData: expect.objectContaining({
+            slides: [
+              expect.objectContaining({
+                slide_image: 'https://mock-s3.pelita.tech/slide-1-bg.jpg',
+                text: 'Isi slide **pertama** belum bold.',
+              }),
+              expect.objectContaining({
+                slide_image: 'https://mock-s3.pelita.tech/cover-dramatic.jpg',
+                text: 'Isi slide **kedua** sudah bold.',
+              }),
+            ],
+          }),
+        })
+      );
     });
   });
 });

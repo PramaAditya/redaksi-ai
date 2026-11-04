@@ -2,7 +2,7 @@ import axios from 'axios';
 import { getConnection } from './db/settings.js';
 
 export interface BufferMediaItem {
-  type: 'image' | 'video';
+  type: 'image';
   url: string;
 }
 
@@ -72,11 +72,7 @@ export async function publishToBuffer(media: BufferMediaItem[], text: string, pu
     };
   }
 
-  const assets = media.map(m => {
-    if (m.type === 'image') return { image: { url: m.url } };
-    if (m.type === 'video') return { video: { url: m.url } };
-    return { image: { url: m.url } };
-  });
+  const assets = media.map(m => ({ image: { url: m.url } }));
 
   const formatGraphQLObject = (obj: any): string => {
     let str = '{';

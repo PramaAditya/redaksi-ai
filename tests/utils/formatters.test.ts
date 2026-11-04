@@ -42,18 +42,4 @@ describe('formatQueueConfirmation', () => {
 
     expect(result).toContain('- <b>Account:</b> poros.perjuangan');
   });
-
-  it('should format video templates appropriately', () => {
-    const result = formatQueueConfirmation({
-      templateId: 'video:poros.perjuangan:title_only',
-      accountName: 'poros.perjuangan',
-    });
-
-    expect(result).toBe([
-      '✅ <b>Masuk antrean sistem (Title Only Video)</b>',
-      '',
-      '- <b>Video Attached:</b> ✔️',
-      '- <b>Account:</b> poros.perjuangan',
-    ].join('\n'));
-  });
 });

@@ -12,15 +12,6 @@ export interface QueueConfirmationParams {
 export function formatQueueConfirmation(params: QueueConfirmationParams): string {
   const account = params.accountName || 'poros.perjuangan';
 
-  if (params.templateId && params.templateId.startsWith('video:')) {
-    return [
-      '✅ <b>Masuk antrean sistem (Title Only Video)</b>',
-      '',
-      '- <b>Video Attached:</b> ✔️',
-      `- <b>Account:</b> ${account}`,
-    ].join('\n');
-  }
-
   const attached = params.hasImage ? '✔️' : '❌';
   const style = params.heroStyle === 'Dark-Dramatize' ? 'Dark Dramatize' : '4K Realistic';
 

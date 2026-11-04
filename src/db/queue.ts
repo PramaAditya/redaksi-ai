@@ -7,7 +7,7 @@ export async function insertQueueItem(data: {
   templateId: string;
   templateData: any;
   text: string;
-  media: { type: 'image' | 'video', url: string }[];
+  media: { type: 'image', url: string }[];
   publishMetadata?: any;
   researchResult?: string;
   agentInsights?: Record<string, string>;

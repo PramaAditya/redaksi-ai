@@ -2,10 +2,9 @@ import { PipelineContext, ResearchResult } from './utils.js';
 import { runCarouselDarkPipeline, carouselDarkTemplateConfig, generateCarouselDarkMedia } from './agents/pipelines/image/poros.perjuangan/carousel_dark.js';
 import { runCarouselMultiImagesPipeline, carouselMultiImagesTemplateConfig, generateCarouselMultiImagesMedia } from './agents/pipelines/image/poros.perjuangan/carousel_multi_images.js';
 import { runSinglePagePipeline, singlePageTemplateConfig, generateSinglePageMedia } from './agents/pipelines/image/poros.perjuangan/single_page.js';
-import { runTitleOnlyPipeline, titleOnlyTemplateConfig, generateTitleOnlyMedia } from './agents/pipelines/video/poros.perjuangan/title_only.js';
 import { runCarouselAnalysisPipeline, carouselAnalysisTemplateConfig, generateCarouselAnalysisMedia } from './agents/pipelines/image/aa.geopolitik/carousel_analysis.js';
 
-export type AlbumStrategy = 'first_only' | 'all_as_slides' | 'distribute_to_slides' | 'first_video_only' | 'ignore';
+export type AlbumStrategy = 'first_only' | 'all_as_slides' | 'distribute_to_slides' | 'ignore';
 
 export interface SlideTypeDefinition {
   type: string;
@@ -37,7 +36,7 @@ export interface TemplateConfig {
   albumStrategy?: AlbumStrategy;
   reduceTextOnAlbum?: boolean;
   runPipeline: (context: PipelineContext, research: ResearchResult, agentInsights?: Record<string, string>) => Promise<void>;
-  regenerateMedia: (templateData: any, settings: any) => Promise<{ type: 'image' | 'video', url: string }[]>;
+  regenerateMedia: (templateData: any, settings: any) => Promise<{ type: 'image', url: string }[]>;
 }
 
 export const TEMPLATES: Record<string, TemplateConfig> = {
@@ -55,11 +54,6 @@ export const TEMPLATES: Record<string, TemplateConfig> = {
     ...singlePageTemplateConfig,
     runPipeline: runSinglePagePipeline,
     regenerateMedia: generateSinglePageMedia
-  },
-  [titleOnlyTemplateConfig.id]: {
-    ...titleOnlyTemplateConfig,
-    runPipeline: runTitleOnlyPipeline,
-    regenerateMedia: generateTitleOnlyMedia
   },
   [carouselAnalysisTemplateConfig.id]: {
     ...carouselAnalysisTemplateConfig,

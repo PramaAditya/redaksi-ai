@@ -117,6 +117,7 @@ describe('imageGenerator utility', () => {
 
     expect(generateImage).toHaveBeenCalledTimes(3);
     expect(result.mediaType).toBe('image/png');
+    expect(result.isFallback).toBe(true);
     expect(s3.uploadToS3).toHaveBeenCalledWith(expect.any(Buffer), 'image/png', '.png');
 
     global.setTimeout = originalSetTimeout;

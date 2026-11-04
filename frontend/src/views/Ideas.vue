@@ -44,14 +44,8 @@ const fetchIdeas = async () => {
     
     ideas.value.forEach(idea => {
       const available = getAvailableTemplatesForIdea(idea);
-      const isSingleVideo = idea.media?.length === 1 && idea.media[0]?.type === 'video';
       if (!selectedTemplates.value[idea.id] && available.length > 0) {
-        if (isSingleVideo) {
-          const videoT = available.find(t => t.id.startsWith('video:'));
-          selectedTemplates.value[idea.id] = videoT ? videoT.id : available[0].id;
-        } else {
-          selectedTemplates.value[idea.id] = available[0].id;
-        }
+        selectedTemplates.value[idea.id] = available[0].id;
       }
     });
   } catch (error) {
@@ -69,24 +63,14 @@ onMounted(async () => {
   await fetchTemplates();
 });
 
-const getAvailableTemplatesForIdea = (idea: any) => {
-  const media = idea?.media || [];
-  const hasVideo = media.some((m: any) => m.type === 'video');
-  return templates.value.filter(t => {
-    if (t.id.startsWith('video:')) {
-      return hasVideo;
-    }
-    return true;
-  });
+const getAvailableTemplatesForIdea = (_idea: any) => {
+  return templates.value;
 };
 
 const convertIdea = async (ideaId: number) => {
   const idea = ideas.value.find(i => i.id === ideaId);
   const available = idea ? getAvailableTemplatesForIdea(idea) : templates.value;
-  const isSingleVideo = idea?.media?.length === 1 && idea.media[0]?.type === 'video';
-  const defaultFallback = isSingleVideo 
-    ? (available.find(t => t.id.startsWith('video:'))?.id || 'video:poros.perjuangan:title_only')
-    : (available[0]?.id || 'image:poros.perjuangan:carousel_dark');
+  const defaultFallback = available[0]?.id || 'image:poros.perjuangan:carousel_dark';
 
   const templateId = selectedTemplates.value[ideaId] || defaultFallback;
   try {
@@ -158,8 +142,7 @@ const formatDate = (dateStr: string) => {
               
               <div v-if="idea.media && idea.media.length > 0" class="mt-3 flex gap-2 overflow-x-auto">
                 <template v-for="(m, i) in idea.media" :key="i">
-                  <img v-if="m.type === 'image'" :src="m.url" class="h-16 w-16 object-cover rounded" />
-                  <div v-else class="h-16 w-16 bg-muted flex items-center justify-center rounded text-xs text-muted">Video</div>
+                  <img :src="m.url" class="h-16 w-16 object-cover rounded" />
                 </template>
               </div>
             </div>
