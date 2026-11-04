@@ -12,6 +12,7 @@ import { getEditorialAgentConfigs } from './agents/editorial/registry.js';
 import { runResearchPhase } from './agents/editorial/research.js';
 import { runOpinionPhase } from './agents/editorial/opinion.js';
 import { scanNewsForConnection } from './agents/editorial/picker.js';
+import { REDAKSI_MCP_TOOLS } from './mcp/tools.js';
 import { getBaseSystemPrompt, mapWithConcurrency, SLIDE_CONCURRENCY } from './utils.js';
 import type { PipelineContext } from './utils.js';
 import multer from 'multer';
@@ -343,6 +344,73 @@ app.get('/api/ideas', requireDashboardAuth, async (req, res) => {
     res.json(allIdeas);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ideas', requireDashboardAuth, async (req, res) => {
+  try {
+    const { connectionId, text, metadata } = req.body;
+    if (!connectionId || !text) {
+      return res.status(400).json({ error: 'connectionId and text are required' });
+    }
+    const [inserted] = await db
+      .insert(ideasTable)
+      .values({
+        connectionId: parseInt(String(connectionId), 10),
+        chatId: 'DASHBOARD',
+        messageId: Date.now(),
+        text: String(text),
+        media: [],
+        status: 'pending',
+        metadata: metadata || { sourceType: 'telegram' },
+      })
+      .returning();
+    return res.json({ message: 'Idea created', idea: inserted });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.delete('/api/ideas/:id', requireDashboardAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id as string, 10);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    await db.delete(ideasTable).where(eq(ideasTable.id, id));
+    return res.json({ message: 'Idea deleted successfully' });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/mcp/tools', requireDashboardAuth, (_req, res) => {
+  const tools = REDAKSI_MCP_TOOLS.map((t) => ({
+    name: t.name,
+    label: t.label,
+    description: t.description,
+  }));
+  res.json({ count: tools.length, tools });
+});
+
+app.post('/api/mcp/call', requireDashboardAuth, async (req, res) => {
+  try {
+    const { name, arguments: args } = req.body;
+    const toolDef = REDAKSI_MCP_TOOLS.find((t) => t.name === name);
+    if (!toolDef) {
+      return res.status(404).json({ error: `MCP tool "${name}" not found` });
+    }
+    const parsed = toolDef.schema.parse(args || {});
+    const port = process.env.PORT || '3000';
+    const localConfig = {
+      apiUrl: `http://127.0.0.1:${port}`,
+      apiKey: process.env.DASHBOARD_PASSWORD || '',
+    };
+    const result = await toolDef.execute(parsed, localConfig);
+    return res.json({ result });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: message });
   }
 });
 
@@ -845,77 +913,154 @@ app.post('/api/queue/:id/generate-slide-image', requireDashboardAuth, async (req
     const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
-    const { target = 'slide', slideIndex, prompt, renderMedia = false } = req.body;
+    const {
+      target = 'slide',
+      slideIndex,
+      slideIndices,
+      prompt,
+      style = 'dramatic',
+      autoRewritePrompt = false,
+      renderMedia = false,
+    } = req.body;
+
+    const validStyle: 'dramatic' | 'realistic' | 'custom' =
+      style === 'realistic' || style === 'custom' ? style : 'dramatic';
+
     const items = await db.select().from(queueTable).where(eq(queueTable.id, id));
     if (items.length === 0) return res.status(404).json({ error: 'Post not found in queue' });
 
     const post = items[0];
-    const templateData: Record<string, any> = { ...(post.templateData as Record<string, any> || {}) };
+    const templateData: Record<string, any> = { ...((post.templateData as Record<string, any>) || {}) };
     let generatedUrl = '';
+    const generatedUrlsByIndex: Record<number, string> = {};
+
+    const rewriteVisualPrompt = async (heading: string, bodyText: string, existingPrompt?: string): Promise<string> => {
+      try {
+        const modelName = process.env.LIGHT_MODEL || 'gemini-3.1-flash-lite';
+        const { text: newPrompt } = await generateText({
+          model: google(modelName),
+          prompt: `You are an art director for an editorial news carousel. Write a single concise English visual prompt (max 35 words) for an AI background image generator that visually represents the following slide content.
+Avoid any text, letters, logos, or watermarks in the scene. Focus on concrete physical subjects, geography, architecture, or dramatic symbolic imagery.
+Slide Heading: ${heading || ''}
+Slide Text: ${bodyText || ''}
+${existingPrompt ? `Previous Prompt (make it fresher/different): ${existingPrompt}` : ''}
+Output ONLY the English image prompt text:`,
+        });
+        return newPrompt.trim() || existingPrompt || heading || 'dark geopolitical editorial photography';
+      } catch {
+        return existingPrompt || heading || 'dark geopolitical editorial photography';
+      }
+    };
+
+    const assignSlideImageUrl = (slideObj: any, url: string) => {
+      if (!slideObj || typeof slideObj !== 'object') return;
+      if (slideObj.type === 'image' || 'imageUrl' in slideObj) {
+        slideObj.imageUrl = url;
+      } else {
+        slideObj.slide_image = url;
+      }
+    };
 
     if (target === 'cover') {
-      const coverPrompt = prompt || templateData.image_prompt || templateData.title || 'dark geopolitical editorial background';
+      let coverPrompt = prompt || templateData.image_prompt || templateData.title || 'dark geopolitical editorial background';
+      if (!prompt && autoRewritePrompt) {
+        coverPrompt = await rewriteVisualPrompt(
+          String(templateData.title || ''),
+          String(templateData.subtitle || post.text || ''),
+          templateData.image_prompt
+        );
+      }
       templateData.image_prompt = coverPrompt;
       const coverRes = await imageGenerator({
         prompt: coverPrompt,
-        style: 'dramatic',
+        style: validStyle,
         aspectRatio: '4:5',
         uploadToS3: true,
       });
-      generatedUrl = coverRes.url || '';
+      generatedUrl = (!coverRes.isFallback && coverRes.url) ? coverRes.url : (templateData.coverImageUrl || '');
       templateData.coverImageUrl = generatedUrl;
     } else if (target === 'all') {
-      const coverPrompt = templateData.image_prompt || templateData.title || 'dark geopolitical editorial background';
+      let coverPrompt = prompt || templateData.image_prompt || templateData.title || 'dark geopolitical editorial background';
+      if (!prompt && autoRewritePrompt) {
+        coverPrompt = await rewriteVisualPrompt(
+          String(templateData.title || ''),
+          String(templateData.subtitle || ''),
+          templateData.image_prompt
+        );
+        templateData.image_prompt = coverPrompt;
+      }
       const slidesArray = Array.isArray(templateData.slides) ? templateData.slides : [];
 
       const [coverRes, slideResList] = await Promise.all([
         imageGenerator({
           prompt: coverPrompt,
-          style: 'dramatic',
+          style: validStyle,
           aspectRatio: '4:5',
           uploadToS3: true,
         }),
         mapWithConcurrency(slidesArray, SLIDE_CONCURRENCY, async (slide: any) => {
-          const sPrompt = slide.image_prompt || slide.title || 'dark geopolitical editorial photography';
+          let sPrompt = typeof slide === 'object' ? (slide.image_prompt || slide.title || slide.text || 'editorial photography') : String(slide);
+          if (autoRewritePrompt && typeof slide === 'object') {
+            sPrompt = await rewriteVisualPrompt(String(slide.title || ''), String(slide.text || ''), slide.image_prompt);
+            slide.image_prompt = sPrompt;
+          }
           return imageGenerator({
             prompt: sPrompt,
-            style: 'dramatic',
+            style: validStyle,
             aspectRatio: '4:5',
             uploadToS3: true,
           });
-        })
+        }),
       ]);
 
       if (!coverRes.isFallback && coverRes.url) {
         templateData.coverImageUrl = coverRes.url;
+        generatedUrl = coverRes.url;
       }
       if (Array.isArray(templateData.slides)) {
         for (let i = 0; i < slideResList.length; i++) {
           const sRes = slideResList[i];
-          if (!sRes.isFallback && sRes.url) {
-            templateData.slides[i].slide_image = sRes.url;
-          } else if (templateData.coverImageUrl) {
-            templateData.slides[i].slide_image = templateData.coverImageUrl;
+          const finalUrl = (!sRes.isFallback && sRes.url) ? sRes.url : (templateData.coverImageUrl || '');
+          if (finalUrl) {
+            assignSlideImageUrl(templateData.slides[i], finalUrl);
+            generatedUrlsByIndex[i] = finalUrl;
           }
         }
       }
     } else {
-      const idx = Number(slideIndex);
-      if (!Array.isArray(templateData.slides) || isNaN(idx) || idx < 0 || idx >= templateData.slides.length) {
-        return res.status(400).json({ error: 'Valid slideIndex is required' });
-      }
-      const slide = templateData.slides[idx];
-      const slidePrompt = prompt || slide.image_prompt || slide.title || 'dark geopolitical editorial photography';
-      templateData.slides[idx].image_prompt = slidePrompt;
+      // Single slide (`slideIndex`) or multiple specific slides (`slideIndices`)
+      const indicesToProcess: number[] = Array.isArray(slideIndices) && slideIndices.length > 0
+        ? slideIndices.map((n: any) => Number(n))
+        : [Number(slideIndex)];
 
-      const slideRes = await imageGenerator({
-        prompt: slidePrompt,
-        style: 'dramatic',
-        aspectRatio: '4:5',
-        uploadToS3: true,
+      if (
+        !Array.isArray(templateData.slides) ||
+        indicesToProcess.some((idx) => isNaN(idx) || idx < 0 || idx >= templateData.slides.length)
+      ) {
+        return res.status(400).json({ error: 'Valid slideIndex or slideIndices within bounds is required' });
+      }
+
+      await mapWithConcurrency(indicesToProcess, SLIDE_CONCURRENCY, async (idx) => {
+        const slide = templateData.slides[idx];
+        let slidePrompt = prompt || (typeof slide === 'object' ? (slide.image_prompt || slide.title || slide.text) : String(slide)) || 'dark geopolitical editorial photography';
+        if (!prompt && autoRewritePrompt && typeof slide === 'object') {
+          slidePrompt = await rewriteVisualPrompt(String(slide.title || ''), String(slide.text || ''), slide.image_prompt);
+        }
+        if (typeof slide === 'object') {
+          templateData.slides[idx].image_prompt = slidePrompt;
+        }
+
+        const slideRes = await imageGenerator({
+          prompt: slidePrompt,
+          style: validStyle,
+          aspectRatio: '4:5',
+          uploadToS3: true,
+        });
+        const finalUrl = (!slideRes.isFallback && slideRes.url) ? slideRes.url : (templateData.coverImageUrl || '');
+        assignSlideImageUrl(templateData.slides[idx], finalUrl);
+        generatedUrlsByIndex[idx] = finalUrl;
+        if (!generatedUrl) generatedUrl = finalUrl;
       });
-      generatedUrl = slideRes.url || '';
-      templateData.slides[idx].slide_image = generatedUrl;
     }
 
     let media = post.media;
@@ -936,10 +1081,11 @@ app.post('/api/queue/:id/generate-slide-image', requireDashboardAuth, async (req
       .where(eq(queueTable.id, post.id));
 
     return res.json({
-      message: 'Image generated successfully',
+      message: 'Image(s) generated successfully',
       url: generatedUrl,
+      generatedUrlsByIndex,
       templateData,
-      media
+      media,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

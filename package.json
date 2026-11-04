@@ -7,6 +7,7 @@
     "start": "npm run start:bot & npm run start:worker",
     "start:bot": "tsx src/bot.ts",
     "start:worker": "tsx src/worker.ts",
+    "start:mcp": "tsx src/mcp.ts",
     "db:push": "drizzle-kit push",
     "test": "vitest run tests/agents tests/utils tests/pipelines tests/worker",
     "test:render": "vitest run tests/render/carousel_render.test.ts",
@@ -39,6 +40,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1048.0",
     "@mendable/firecrawl-js": "^4.20.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/marked": "^5.0.2",
     "@types/multer": "^2.1.0",
     "cors": "^2.8.6",
