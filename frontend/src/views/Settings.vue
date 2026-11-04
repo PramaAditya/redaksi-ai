@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Save, Settings2, Loader2, Info, Sparkles, X, Trash2, Plug, CheckCircle2, AlertCircle } from 'lucide-vue-next'
+import { Save, Settings2, Loader2, Info, Sparkles, X, Trash2, Plug, CheckCircle2, AlertCircle, Radar, Plus } from 'lucide-vue-next'
 import { getAuthHeaders } from '../auth'
 import ImageUploader from '../components/ImageUploader.vue'
 import PasswordInput from '../components/PasswordInput.vue'
@@ -20,8 +20,61 @@ const settings = ref<any>({
   bufferChannelNetwork: '',
   editorialGuidelines: '',
   postingSlots: [],
-  bannedWords: []
+  bannedWords: [],
+  newsRadarConfig: {
+    mode: 'off',
+    keywords: [],
+    language: 'id',
+    customRssUrls: [],
+    intervalHours: 4,
+    minPendingQueueThreshold: 2,
+    defaultTemplateId: 'image:aa.geopolitik:carousel_analysis',
+    defaultHeroStyle: 'Dark-Dramatize',
+    maxStoriesPerScan: 3,
+    lastScannedAt: null
+  }
 })
+
+const newRadarKeyword = ref('')
+const newCustomRssUrl = ref('')
+
+const addRadarKeyword = () => {
+  const kw = newRadarKeyword.value.trim()
+  if (!kw) return
+  if (!settings.value.newsRadarConfig) {
+    settings.value.newsRadarConfig = { mode: 'off', keywords: [], language: 'id', customRssUrls: [], intervalHours: 4, minPendingQueueThreshold: 2, defaultTemplateId: 'image:aa.geopolitik:carousel_analysis', defaultHeroStyle: 'Dark-Dramatize', maxStoriesPerScan: 3 }
+  }
+  if (!Array.isArray(settings.value.newsRadarConfig.keywords)) {
+    settings.value.newsRadarConfig.keywords = []
+  }
+  if (!settings.value.newsRadarConfig.keywords.some((k: string) => k.toLowerCase() === kw.toLowerCase())) {
+    settings.value.newsRadarConfig.keywords.push(kw)
+  }
+  newRadarKeyword.value = ''
+}
+
+const removeRadarKeyword = (idx: number) => {
+  settings.value.newsRadarConfig?.keywords?.splice(idx, 1)
+}
+
+const addCustomRssUrl = () => {
+  const url = newCustomRssUrl.value.trim()
+  if (!url || !url.startsWith('http')) {
+    toast.add({ title: 'Please enter a valid http/https RSS URL.', color: 'warning' })
+    return
+  }
+  if (!Array.isArray(settings.value.newsRadarConfig.customRssUrls)) {
+    settings.value.newsRadarConfig.customRssUrls = []
+  }
+  if (!settings.value.newsRadarConfig.customRssUrls.includes(url)) {
+    settings.value.newsRadarConfig.customRssUrls.push(url)
+  }
+  newCustomRssUrl.value = ''
+}
+
+const removeCustomRssUrl = (idx: number) => {
+  settings.value.newsRadarConfig?.customRssUrls?.splice(idx, 1)
+}
 
 const loading = ref(true)
 const saving = ref(false)
@@ -243,7 +296,22 @@ const fetchSettings = async () => {
     const activeSettings = connections.find((c: any) => c.id === connectionStore.activeConnectionId)
     
     if (activeSettings) {
-        settings.value = { ...settings.value, ...activeSettings }
+        settings.value = {
+          ...settings.value,
+          ...activeSettings,
+          newsRadarConfig: {
+            mode: 'off',
+            keywords: [],
+            language: 'id',
+            customRssUrls: [],
+            intervalHours: 4,
+            minPendingQueueThreshold: 2,
+            defaultTemplateId: 'image:aa.geopolitik:carousel_analysis',
+            defaultHeroStyle: 'Dark-Dramatize',
+            maxStoriesPerScan: 3,
+            ...(activeSettings.newsRadarConfig || {})
+          }
+        }
     } else {
         error.value = 'Connection not found'
     }
@@ -263,6 +331,7 @@ const tabItems = [
   { label: 'Media Assets', icon: 'i-lucide-image', slot: 'media' as const },
   { label: 'Publishing', icon: 'i-lucide-calendar', slot: 'publishing' as const },
   { label: 'Editorial', icon: 'i-lucide-pen-tool', slot: 'editorial' as const },
+  { label: 'News Radar', icon: 'i-lucide-radar', slot: 'radar' as const },
   { label: 'Moderation', icon: 'i-lucide-shield', slot: 'moderation' as const },
   { label: 'API Keys', icon: 'i-lucide-key', slot: 'keys' as const }
 ]
@@ -514,6 +583,181 @@ const testBufferConnection = async () => {
                 guidancePlaceholder="e.g., make it more aggressive and punchy"
                 aiContext="This text represents the global editorial guidelines and framing instructions for a news AI agent. It dictates how the AI should write its content, including its tone, perspective, and biases."
               />
+            </div>
+          </template>
+
+          <template #radar>
+            <div class="mt-6 space-y-6" v-if="settings.newsRadarConfig">
+              <div class="flex items-center justify-between border-b border-default pb-2">
+                <h2 class="text-lg font-bold text-default flex items-center gap-2">
+                  <Radar class="w-5 h-5 text-primary" />
+                  Autonomous News Radar & AI Chief Editor
+                </h2>
+                <span v-if="settings.newsRadarConfig.lastScannedAt" class="text-xs text-muted">
+                  Last scanned: {{ new Date(settings.newsRadarConfig.lastScannedAt).toLocaleString('id-ID') }}
+                </span>
+              </div>
+
+              <!-- 1. Autopilot Mode Selector -->
+              <div>
+                <label class="block text-sm font-semibold text-default mb-3">1. Operation Mode (Autopilot Level)</label>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div
+                    @click="settings.newsRadarConfig.mode = 'off'"
+                    class="p-4 rounded-xl border cursor-pointer transition"
+                    :class="settings.newsRadarConfig.mode === 'off' ? 'border-primary bg-primary/8 ring-1 ring-primary/30' : 'border-default bg-default hover:bg-muted'"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-bold text-default">Manual Scan Only</span>
+                      <input type="radio" :checked="settings.newsRadarConfig.mode === 'off'" class="text-primary" />
+                    </div>
+                    <p class="text-xs text-muted">Only fetches & ranks news when you click "Scan Breaking News" on the Ideas page.</p>
+                  </div>
+
+                  <div
+                    @click="settings.newsRadarConfig.mode = 'semi_auto'"
+                    class="p-4 rounded-xl border cursor-pointer transition"
+                    :class="settings.newsRadarConfig.mode === 'semi_auto' ? 'border-primary bg-primary/8 ring-1 ring-primary/30' : 'border-default bg-default hover:bg-muted'"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-bold text-default">Auto-Curate to Ideas</span>
+                      <input type="radio" :checked="settings.newsRadarConfig.mode === 'semi_auto'" class="text-primary" />
+                    </div>
+                    <p class="text-xs text-muted">Periodically scans RSS feeds, clusters duplicate articles, and places Top picks in your Ideas inbox for 1-click approval.</p>
+                  </div>
+
+                  <div
+                    @click="settings.newsRadarConfig.mode = 'autopilot'"
+                    class="p-4 rounded-xl border cursor-pointer transition"
+                    :class="settings.newsRadarConfig.mode === 'autopilot' ? 'border-amber-500 bg-amber-500/8 ring-1 ring-amber-500/30' : 'border-default bg-default hover:bg-muted'"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-bold text-amber-500">Full Autopilot Queue</span>
+                      <input type="radio" :checked="settings.newsRadarConfig.mode === 'autopilot'" class="text-amber-500" />
+                    </div>
+                    <p class="text-xs text-muted">When your Pending Queue drops below threshold, automatically picks the #1 story and generates a ready-to-publish Carousel!</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 2. Topic Keywords (Google News RSS Builder) -->
+              <div class="bg-muted/60 rounded-xl p-4 border border-default space-y-4">
+                <div>
+                  <label class="block text-sm font-semibold text-default">2. Topic Radar Keywords (Google News Auto-Builder)</label>
+                  <p class="text-xs text-muted mt-0.5">Add topics or keywords for this account. Redaksi.AI automatically builds and decodes Google News RSS feeds from these topics.</p>
+                </div>
+
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    v-for="(kw, idx) in settings.newsRadarConfig.keywords"
+                    :key="idx"
+                    class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-primary/15 text-primary border border-primary/30"
+                  >
+                    {{ kw }}
+                    <button type="button" @click="removeRadarKeyword(Number(idx))" class="hover:text-error cursor-pointer">
+                      <X class="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                  <span v-if="!settings.newsRadarConfig.keywords?.length" class="text-xs text-muted italic py-1">
+                    No custom keywords set (will auto-infer from Editorial Guidelines).
+                  </span>
+                </div>
+
+                <div class="flex flex-col sm:flex-row gap-3">
+                  <input
+                    v-model="newRadarKeyword"
+                    @keyup.enter.prevent="addRadarKeyword"
+                    type="text"
+                    placeholder="e.g. Geopolitik, Timur Tengah, Laut China Selatan, BRICS..."
+                    class="flex-1 px-3.5 py-2 border border-default rounded-md text-sm bg-default text-default"
+                  />
+                  <button
+                    type="button"
+                    @click="addRadarKeyword"
+                    class="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md bg-primary text-inverted hover:bg-primary/90 cursor-pointer"
+                  >
+                    <Plus class="w-4 h-4" />
+                    Add Topic
+                  </button>
+                  <select
+                    v-model="settings.newsRadarConfig.language"
+                    class="px-3 py-2 border border-default rounded-md text-sm bg-default text-default"
+                  >
+                    <option value="id">🇮🇩 Bahasa Indonesia (ID)</option>
+                    <option value="en">🌐 Global English (US/Intl)</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- 3. Schedule & Autopilot Parameters -->
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label class="block text-xs font-semibold text-default mb-1">Scan Interval (Hours)</label>
+                  <input
+                    v-model.number="settings.newsRadarConfig.intervalHours"
+                    type="number"
+                    min="1"
+                    max="48"
+                    class="w-full px-3 py-2 border border-default rounded-md text-sm bg-default text-default"
+                  />
+                  <p class="text-[11px] text-muted mt-1">How often background radar scans RSS.</p>
+                </div>
+                <div>
+                  <label class="block text-xs font-semibold text-default mb-1">Stories Picked per Scan</label>
+                  <input
+                    v-model.number="settings.newsRadarConfig.maxStoriesPerScan"
+                    type="number"
+                    min="1"
+                    max="5"
+                    class="w-full px-3 py-2 border border-default rounded-md text-sm bg-default text-default"
+                  />
+                  <p class="text-[11px] text-muted mt-1">Top 1 to 5 viral story clusters per scan.</p>
+                </div>
+                <div>
+                  <label class="block text-xs font-semibold text-default mb-1">Autopilot Min Queue Threshold</label>
+                  <input
+                    v-model.number="settings.newsRadarConfig.minPendingQueueThreshold"
+                    type="number"
+                    min="1"
+                    max="20"
+                    class="w-full px-3 py-2 border border-default rounded-md text-sm bg-default text-default"
+                  />
+                  <p class="text-[11px] text-muted mt-1">Auto-generate when Pending Queue &lt; this number.</p>
+                </div>
+              </div>
+
+              <!-- 4. Custom RSS Feeds -->
+              <div class="space-y-3">
+                <label class="block text-sm font-semibold text-default">3. Additional Custom RSS Feeds (Optional)</label>
+                <div class="flex gap-2">
+                  <input
+                    v-model="newCustomRssUrl"
+                    @keyup.enter.prevent="addCustomRssUrl"
+                    type="url"
+                    placeholder="https://www.antaranews.com/rss/dunia.xml"
+                    class="flex-1 px-3.5 py-2 border border-default rounded-md text-sm bg-default text-default"
+                  />
+                  <button
+                    type="button"
+                    @click="addCustomRssUrl"
+                    class="px-4 py-2 text-xs font-semibold rounded-md border border-default bg-default hover:bg-muted text-default cursor-pointer"
+                  >
+                    + Add Feed URL
+                  </button>
+                </div>
+                <ul v-if="settings.newsRadarConfig.customRssUrls?.length" class="space-y-1.5">
+                  <li
+                    v-for="(rssUrl, idx) in settings.newsRadarConfig.customRssUrls"
+                    :key="idx"
+                    class="flex items-center justify-between px-3 py-2 rounded-md bg-muted border border-default text-xs font-mono text-default"
+                  >
+                    <span class="truncate mr-2">{{ rssUrl }}</span>
+                    <button type="button" @click="removeCustomRssUrl(Number(idx))" class="text-error hover:underline shrink-0 cursor-pointer">
+                      Remove
+                    </button>
+                  </li>
+                </ul>
+              </div>
             </div>
           </template>
 

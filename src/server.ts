@@ -11,6 +11,7 @@ import { runAutomatedPipeline } from './agent.js';
 import { getEditorialAgentConfigs } from './agents/editorial/registry.js';
 import { runResearchPhase } from './agents/editorial/research.js';
 import { runOpinionPhase } from './agents/editorial/opinion.js';
+import { scanNewsForConnection } from './agents/editorial/picker.js';
 import { getBaseSystemPrompt, mapWithConcurrency, SLIDE_CONCURRENCY } from './utils.js';
 import type { PipelineContext } from './utils.js';
 import multer from 'multer';
@@ -345,6 +346,23 @@ app.get('/api/ideas', requireDashboardAuth, async (req, res) => {
   }
 });
 
+app.post('/api/ideas/scan-news', requireDashboardAuth, async (req, res) => {
+  try {
+    const { connectionId, maxStories } = req.body;
+    if (!connectionId) {
+      return res.status(400).json({ error: 'connectionId is required' });
+    }
+    const result = await scanNewsForConnection(parseInt(String(connectionId), 10), {
+      triggerSource: 'manual',
+      maxStoriesOverride: maxStories ? parseInt(String(maxStories), 10) : undefined,
+    });
+    return res.json(result);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: message });
+  }
+});
+
 app.post('/api/ideas/:id/convert', requireDashboardAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id as string, 10);
@@ -362,16 +380,17 @@ app.post('/api/ideas/:id/convert', requireDashboardAuth, async (req, res) => {
       return res.status(400).json({ error: 'Idea already converted' });
     }
 
-    const { templateId } = req.body;
+    const { templateId, heroStyle } = req.body;
     const chosenTemplateId = templateId || 'image:poros.perjuangan:carousel_dark';
 
     await db.insert(jobsTable).values({
       connectionId: idea.connectionId,
-      chatId: idea.chatId,
+      chatId: idea.chatId || 'DASHBOARD',
       messageId: idea.messageId,
       text: idea.text,
       media: idea.media,
       templateId: chosenTemplateId,
+      heroStyle: heroStyle || 'Dark-Dramatize',
       status: 'pending'
     });
     
@@ -620,6 +639,7 @@ app.put('/api/connections/:id', requireDashboardAuth, async (req, res) => {
     if (req.body.cronEndHour !== undefined) updateData.cronEndHour = parseInt(req.body.cronEndHour, 10);
     if (req.body.postingSlots !== undefined) updateData.postingSlots = req.body.postingSlots;
     if (req.body.bannedWords !== undefined) updateData.bannedWords = req.body.bannedWords;
+    if (req.body.newsRadarConfig !== undefined) updateData.newsRadarConfig = req.body.newsRadarConfig;
 
     if (
       (req.body.bufferApiKey !== undefined || req.body.bufferChannelId !== undefined) &&

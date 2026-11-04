@@ -4,6 +4,7 @@ import { eq, sql, asc } from 'drizzle-orm';
 import { runAutomatedPipeline } from './agent.js';
 import { publishToBuffer } from './buffer.js';
 import { pollBufferingPosts } from './worker/polling.js';
+import { scanNewsForConnection } from './agents/editorial/picker.js';
 import { Telegraf } from 'telegraf';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
@@ -328,6 +329,38 @@ async function autoPublishQueue() {
 console.log(`[Worker] Auto-publish worker started (Checking every minute against DB settings).`);
 cron.schedule('* * * * *', autoPublishQueue, {
   timezone: "Asia/Jakarta"
+});
+
+// Periodic News Radar scanner (checks every 10 minutes if any connection's intervalHours has elapsed)
+async function checkNewsRadarSchedules() {
+  if (isShuttingDown) return;
+  try {
+    const connections = await getConnections();
+    const nowMs = Date.now();
+    for (const conn of connections) {
+      const radar = (conn as any).newsRadarConfig;
+      if (!radar || radar.mode === 'off') continue;
+      const intervalMs = Math.max(1, Number(radar.intervalHours || 4)) * 3600 * 1000;
+      const lastScanMs = radar.lastScannedAt ? new Date(radar.lastScannedAt).getTime() : 0;
+      if (!lastScanMs || nowMs - lastScanMs >= intervalMs) {
+        console.log(`[Worker:NewsRadar] Interval reached for connection #${conn.id} (${conn.name}, mode=${radar.mode}). Scanning...`);
+        try {
+          const res = await scanNewsForConnection(conn.id, { triggerSource: 'cron' });
+          if (res.autoQueuedJob) {
+            setImmediate(processNextJob);
+          }
+        } catch (scanErr: any) {
+          console.error(`[Worker:NewsRadar] Scan failed for connection #${conn.id}:`, scanErr.message || scanErr);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error('[Worker:NewsRadar] Error checking radar schedules:', err.message || err);
+  }
+}
+
+cron.schedule('*/10 * * * *', checkNewsRadarSchedules, {
+  timezone: 'Asia/Jakarta'
 });
 
 // Polling worker for posts in 'buffering' state (checking Instagram publication status)

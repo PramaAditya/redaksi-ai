@@ -5,6 +5,40 @@ export const globalSettingsTable = pgTable('global_settings', {
   telegramBotToken: text('telegram_bot_token'),
 });
 
+export interface NewsRadarConfig {
+  mode: 'off' | 'semi_auto' | 'autopilot';
+  keywords: string[];
+  language: 'id' | 'en';
+  customRssUrls: string[];
+  intervalHours: number;
+  minPendingQueueThreshold: number;
+  defaultTemplateId: string;
+  defaultHeroStyle: 'Dark-Dramatize' | '4K-Enhance';
+  maxStoriesPerScan: number;
+  lastScannedAt?: string | null;
+}
+
+export interface IdeaMetadata {
+  sourceType?: 'telegram' | 'radar';
+  headline?: string;
+  pitch?: string;
+  sources?: { url: string; domain: string; title?: string }[];
+  rank?: number;
+}
+
+export const DEFAULT_NEWS_RADAR_CONFIG: NewsRadarConfig = {
+  mode: 'off',
+  keywords: [],
+  language: 'id',
+  customRssUrls: [],
+  intervalHours: 4,
+  minPendingQueueThreshold: 2,
+  defaultTemplateId: 'image:aa.geopolitik:carousel_analysis',
+  defaultHeroStyle: 'Dark-Dramatize',
+  maxStoriesPerScan: 3,
+  lastScannedAt: null,
+};
+
 export const settingsTable = pgTable('settings', {
   id: serial('id').primaryKey(),
   name: text('name').notNull().default('Default Connection'),
@@ -20,6 +54,7 @@ export const settingsTable = pgTable('settings', {
   cronStartHour: integer('cron_start_hour').default(6).notNull(),
   cronEndHour: integer('cron_end_hour').default(23).notNull(),
   lastAutoPublishAt: timestamp('last_auto_publish_at'),
+  newsRadarConfig: jsonb('news_radar_config').$type<NewsRadarConfig>().default(DEFAULT_NEWS_RADAR_CONFIG).notNull(),
 });
 
 export const queueTable = pgTable('queue', {
@@ -55,6 +90,7 @@ export const ideasTable = pgTable('ideas', {
   text: text('text').notNull(),
   media: jsonb('media').$type<{ type: 'image', url: string, mimeType?: string }[]>().default([]).notNull(),
   status: text('status').notNull().default('pending'), // pending, converted, rejected
+  metadata: jsonb('metadata').$type<IdeaMetadata>().default({}).notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
