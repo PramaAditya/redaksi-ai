@@ -9,7 +9,6 @@ for (const [key, val] of Object.entries(process.env)) {
 
 import { generateCarouselAnalysisContent, carouselAnalysisTemplateConfig } from '../src/agents/pipelines/image/aa.geopolitik/carousel_analysis.js';
 import { getBaseSystemPrompt, PipelineContext } from '../src/utils.js';
-import { insertQueueItem } from '../src/db/queue.js';
 
 const DEFAULT_SCRIPT = `Slide 1
 Headline: Pemilu AS Baru Saja Selesai. Kenapa Kita di Indonesia Harus Peduli? 🇺🇸🇮🇩
@@ -39,8 +38,111 @@ const connectionId = parseInt(process.env.CONNECTION_ID || '5', 10);
 const shouldSaveToQueue = process.env.SAVE_TO_QUEUE === 'true';
 
 async function main() {
+  const appUrl = (process.env.APP_URL || 'https://ignewsbot.rekapancatama.com').replace(/\/$/, '');
+  const password = process.env.DASHBOARD_PASSWORD || '';
+
+  if (shouldSaveToQueue && password) {
+    console.log(`[1/4] Parsing script & creating post on ${appUrl}/api/queue/from-script...`);
+    const createRes = await fetch(`${appUrl}/api/queue/from-script`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${password}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        connectionId,
+        templateId: carouselAnalysisTemplateConfig.id,
+        text: userInput,
+        generateImages: false,
+        status: 'pending'
+      })
+    });
+
+    if (!createRes.ok) {
+      throw new Error(`Failed to create from script (${createRes.status}): ${await createRes.text()}`);
+    }
+
+    const createData: any = await createRes.json();
+    const post = createData.item;
+    const postId = post.id;
+    const slides: any[] = post.templateData?.slides || [];
+
+    console.log(`      -> Created Queue Post #${postId} (1 Cover + ${slides.length} Body Slides)`);
+
+    // 2. Generate Cover Image
+    console.log(`[2/4] Generating AI Cover Image for Post #${postId}...`);
+    const coverRes = await fetch(`${appUrl}/api/queue/${postId}/generate-slide-image`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${password}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        target: 'cover',
+        prompt: post.templateData?.image_prompt,
+        renderMedia: false
+      })
+    });
+    if (coverRes.ok) {
+      const cData: any = await coverRes.json();
+      console.log(`      -> Cover Image URL: ${cData.url}`);
+    } else {
+      console.warn(`      -> Cover Image warning: ${await coverRes.text()}`);
+    }
+
+    // 3. Generate Each Slide Image
+    console.log(`[3/4] Generating AI Background Images for ${slides.length} Body Slides...`);
+    for (let i = 0; i < slides.length; i++) {
+      console.log(`      -> Generating Slide ${i + 1}/${slides.length}: "${slides[i].title}"...`);
+      const sRes = await fetch(`${appUrl}/api/queue/${postId}/generate-slide-image`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${password}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          target: 'slide',
+          slideIndex: i,
+          prompt: slides[i].image_prompt,
+          renderMedia: false
+        })
+      });
+      if (sRes.ok) {
+        const sData: any = await sRes.json();
+        console.log(`         Slide ${i + 1} Image URL: ${sData.url}`);
+      } else {
+        console.warn(`         Slide ${i + 1} warning: ${await sRes.text()}`);
+      }
+    }
+
+    // 4. Render Final 1080x1350 Carousel PNGs via Production Media Renderer
+    console.log(`[4/4] Rendering final 1080x1350 PNG slides via ${appUrl}/api/queue/${postId}/regenerate-media...`);
+    const renderRes = await fetch(`${appUrl}/api/queue/${postId}/regenerate-media`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${password}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!renderRes.ok) {
+      throw new Error(`Failed to render media (${renderRes.status}): ${await renderRes.text()}`);
+    }
+
+    const renderData: any = await renderRes.json();
+    console.log('\n' + '='.repeat(78));
+    console.log(`>>> PRODUCTION CAROUSEL READY! (Queue Post ID: #${postId})`);
+    console.log(`>>> Edit / Preview URL: ${appUrl}/post/${postId}`);
+    console.log(`>>> Rendered Slides (${renderData.media?.length || 0} PNGs):`);
+    (renderData.media || []).forEach((m: any, idx: number) => {
+      console.log(`    [${idx === 0 ? 'COVER' : 'SLIDE ' + idx}] ${m.url}`);
+    });
+    console.log('='.repeat(78));
+    return;
+  }
+
   console.log('='.repeat(78));
-  console.log('    TESTING AA.GEOPOLITIK CAROUSEL ANALYSIS (SCRIPT-TO-CAROUSEL MODE)');
+  console.log('    TESTING AA.GEOPOLITIK CAROUSEL ANALYSIS (SCRIPT-TO-CAROUSEL PREVIEW)');
   console.log('='.repeat(78));
 
   const currentDateObj = new Date();
@@ -72,65 +174,17 @@ async function main() {
     connectionId,
   };
 
-  console.log('Generating content via generateCarouselAnalysisContent (Script Mode)...\n');
   const result = await generateCarouselAnalysisContent(context, {});
 
-  console.log('='.repeat(78));
-  console.log('>>> [COVER SLIDE (FROM SLIDE 1)]');
-  console.log('='.repeat(78));
-  console.log(`TITLE          : ${result.title}`);
-  console.log(`SUBTITLE       : ${result.subtitle}`);
-  console.log(`IMAGE PROMPT   : ${result.image_prompt}`);
-
-  console.log('\n' + '='.repeat(78));
-  console.log(`>>> [${result.slides.length} DYNAMIC BODY SLIDES]`);
-  console.log('='.repeat(78));
-
+  console.log(`COVER TITLE   : ${result.title}`);
+  console.log(`COVER SUBTITLE: ${result.subtitle}`);
+  console.log(`COVER PROMPT  : ${result.image_prompt}`);
   result.slides.forEach((slide, idx) => {
-    console.log(`\n--- BODY SLIDE ${idx + 1} (${slide.type.toUpperCase()}) ---`);
+    console.log(`\n--- BODY SLIDE ${idx + 1} ---`);
     console.log(`TITLE       : ${slide.title}`);
-    console.log(`TEXT        : \n${slide.text}`);
+    console.log(`TEXT        :\n${slide.text}`);
     console.log(`IMAGE PROMPT: ${slide.image_prompt || 'N/A'}`);
   });
-
-  console.log('\n' + '='.repeat(78));
-  console.log('>>> [METADATA & CAPTION]');
-  console.log('='.repeat(78));
-  console.log(`Source Name : ${result.source_name}`);
-  console.log(`Source URL  : ${result.source_url || 'N/A'}`);
-  console.log('\nFinal Instagram Caption:\n');
-  console.log(result.finalCaption);
-
-  if (shouldSaveToQueue) {
-    const templateData = {
-      title: result.title,
-      subtitle: result.subtitle,
-      image_prompt: result.image_prompt,
-      slides: result.slides.map(s => ({ ...s, slide_image: '' })),
-      source_name: result.source_name,
-      source_url: result.source_url,
-      coverImageUrl: '',
-      inputImages: []
-    };
-    const [inserted] = await insertQueueItem({
-      connectionId,
-      templateId: carouselAnalysisTemplateConfig.id,
-      templateData,
-      text: result.finalCaption,
-      media: [],
-      status: 'draft',
-      chatId: 'OMP_EXTENSION',
-      messageId: Date.now(),
-      researchResult: '',
-      agentInsights: {},
-      rawInput: userInput
-    });
-    const appUrl = (process.env.APP_URL || 'https://ignewsbot.rekapancatama.com').replace(/\/$/, '');
-    console.log('\n' + '='.repeat(78));
-    console.log(`>>> SAVED TO PRODUCTION QUEUE (ID: ${inserted.id})`);
-    console.log(`>>> Edit / Generate Images at: ${appUrl}/post/${inserted.id}`);
-    console.log('='.repeat(78));
-  }
 }
 
 main().catch(err => {

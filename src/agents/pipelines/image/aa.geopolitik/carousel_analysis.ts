@@ -250,6 +250,7 @@ export async function runCarouselAnalysisPipeline(
 
   // Phase 2: Cover Visual Curation / Generation
   await notifyStatus('🎨 Menyiapkan visual cover...');
+  let coverImageUrl = '';
 
   const isAlbum = context.mediaItems && context.mediaItems.length > 0;
   const imageMediaItems = isAlbum ? context.mediaItems.filter(item => item.type === 'image') : [];
