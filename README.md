@@ -6,13 +6,13 @@
   <img src="https://img.shields.io/badge/Node.js-v20+-blue?style=flat-square&logo=node.js" alt="Node Version">
   <img src="https://img.shields.io/badge/Gemini-3.1_Pro_%2F_3.8_Flash-orange?style=flat-square&logo=google" alt="Gemini Model">
   <img src="https://img.shields.io/badge/Templates-4_Pipelines-purple?style=flat-square" alt="Templates">
-  <img src="https://img.shields.io/badge/Tests-73_Passing-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-75_Passing-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/Vue.js-v3.5-4fc08d?style=flat-square&logo=vuedotjs" alt="Vue Version">
   <img src="https://img.shields.io/badge/Drizzle_ORM-v0.45-green?style=flat-square" alt="Drizzle ORM">
   <img src="https://img.shields.io/badge/License-ISC-red?style=flat-square" alt="License">
 </p>
 
-<h1 align="center">ig-news-maker-bot</h1>
+<h1 align="center">redaksi-ai</h1>
 
 <p align="center">
   <b>An automated news curation, geopolitical analysis, and Instagram carousel rendering pipeline.</b>
@@ -47,7 +47,7 @@ $ SAVE_TO_QUEUE=true npx tsx scripts/test_pipeline_aa_geopolitik_text.ts
 
 ## Why Not Manual Figma + Copywriting?
 
-| Dimension | ig-news-maker-bot | Manual Figma + Copywriting |
+| Dimension | redaksi-ai | Manual Figma + Copywriting |
 | :--- | :--- | :--- |
 | **Research & Drafting** | ✅ Autonomous 5W1H research (Exa/Firecrawl) or **100% Verbatim Script Mode** | Manual browsing and slide-by-slide copy-pasting |
 | **Slide Count & Layout** | ✅ Dynamic $1..16$ slides with continuous `[min, max]` binary-search text fitting | Fixed artboards; manual font resizing per slide |
@@ -102,7 +102,7 @@ docker-compose up --build -d
 ## Testing & CLI Runners
 
 ```bash
-# Run the full Vitest unit & pipeline test suite (73 tests across 13 files)
+# Run the full Vitest unit & pipeline test suite (75 tests across 13 files)
 npm test
 
 # Preview AA Geopolitik Script-to-Carousel text & image prompts (no S3/Puppeteer required)

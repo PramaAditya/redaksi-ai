@@ -150,7 +150,7 @@ const topNavItems = computed<MainNavItem[]>(() => [
               class="hidden md:inline-flex"
               @click="sidebarOpen = !sidebarOpen"
             />
-            <h1 class="text-base sm:text-lg font-semibold truncate shrink-0">IG News Maker</h1>
+            <h1 class="text-base sm:text-lg font-bold tracking-tight truncate shrink-0">Redaksi<span class="text-primary">.AI</span></h1>
           </div>
           
           <!-- Desktop Navigation -->
