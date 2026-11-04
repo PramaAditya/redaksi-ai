@@ -27,37 +27,46 @@ export interface SelectedRadarStory {
 }
 
 const pickerSchema = z.object({
-  ranked_stories: z
-    .array(
-      z.object({
-        title: z
-          .string()
-          .describe('Judul utama berita yang tajam, faktual, dan representatif dalam Bahasa Indonesia'),
-        links: z
-          .array(z.string())
-          .min(1)
-          .describe(
-            'Semua URL dari daftar kandidat yang membahas peristiwa/isu yang SAMA (kelompokkan berita kembar dari berbagai media ke dalam array ini)'
-          ),
-        pitch: z
-          .string()
-          .describe(
-            'Penjelasan singkat 1-2 kalimat ala Kepala Redaksi mengapa isu ini sangat menarik/viral untuk audiens akun ini dan sudut pandang (angle) apa yang harus diangkat'
-          ),
-      })
-    )
-    .min(1)
-    .max(5),
+  ranked_stories: z.array(
+    z.object({
+      title: z
+        .string()
+        .describe('Judul utama berita yang tajam, faktual, dan representatif dalam Bahasa Indonesia'),
+      article_ids: z
+        .array(z.number())
+        .optional()
+        .describe(
+          'Daftar nomor ID artikel kandidat (1..N) yang membahas peristiwa/isu yang SAMA (kelompokkan berita kembar ke sini)'
+        ),
+      links: z
+        .array(z.string())
+        .optional()
+        .describe('Opsional: URL artikel kandidat jika tidak menggunakan article_ids'),
+      pitch: z
+        .string()
+        .describe(
+          'Penjelasan singkat 1-2 kalimat ala Kepala Redaksi mengapa isu ini sangat menarik/viral untuk audiens akun ini dan sudut pandang (angle) apa yang harus diangkat'
+        ),
+    })
+  ),
 });
 
 function inferDefaultKeywords(connectionName: string, guidelines: string): string[] {
   const combined = `${connectionName} ${guidelines}`.toLowerCase();
+  if (
+    combined.includes('palestina') ||
+    combined.includes('iran') ||
+    combined.includes('lebanon') ||
+    combined.includes('yaman') ||
+    combined.includes('poros perlawanan')
+  ) {
+    return ['Iran', 'Palestina', 'Lebanon', 'Yaman', 'Israel', 'Timur Tengah', 'Suriah'];
+  }
   if (combined.includes('geopolitik') || combined.includes('internasional') || combined.includes('global')) {
     return ['Geopolitik', 'Timur Tengah', 'Laut China Selatan', 'BRICS', 'Konflik Militer', 'Perang Dagang'];
   }
   return ['Pemerintah Indonesia', 'Kebijakan Ekonomi', 'DPR', 'Politik Nasional', 'Hukum Indonesia'];
 }
-
 /**
  * Pure AI Chief Editor Picker function:
  * Deduplicates semantically against recentTitles, clusters duplicate event articles into `links[]`,
@@ -91,20 +100,20 @@ Anda DILARANG KERAS memilih artikel kandidat yang membahas peristiwa, insiden, a
 ${recentListText}
 -----------------------------------------------------
 3. MULTI-SOURCE CLUSTERING:
-Jika ada 2-5 artikel kandidat dari media berbeda yang membahas peristiwa yang sama, gabungkan SEMUA URL mereka ke dalam properti \`links\` pada satu item cerita yang sama agar tim riset kami memiliki rujukan multi-sumber.`;
+Jika ada 2-5 artikel kandidat dari media berbeda yang membahas peristiwa yang sama, masukkan semua nomor \`id\` mereka ke dalam array \`article_ids\` pada satu item cerita yang sama agar tim riset kami memiliki rujukan multi-sumber.`;
 
-  const indexedCandidates = candidateArticles.slice(0, 40).map((a, idx) => ({
+  const indexedCandidates = candidateArticles.slice(0, 35).map((a, idx) => ({
     id: idx + 1,
     title: a.title,
     source: a.source,
     pubDate: a.pubDate,
-    link: a.link,
     snippet: a.description,
   }));
 
   const modelName =
     process.env.PICKER_MODEL ||
-    process.env.LIGHT_MODEL ||
+    process.env.MIDDLE_MODEL ||
+    process.env.CONTENT_WRITER_MODEL ||
     'gemini-3-flash-preview';
 
   const { object } = await generateObject({
@@ -114,7 +123,31 @@ Jika ada 2-5 artikel kandidat dari media berbeda yang membahas peristiwa yang sa
     prompt: `Daftar Kandidat Berita Terbaru:\n${JSON.stringify(indexedCandidates, null, 2)}`,
   });
 
-  return (object.ranked_stories || []).slice(0, maxStories);
+  const stories: SelectedRadarStory[] = [];
+  for (const item of (object.ranked_stories || []).slice(0, maxStories)) {
+    const resolvedLinks: string[] = [];
+    if (Array.isArray(item.article_ids)) {
+      for (const idNum of item.article_ids) {
+        const cand = candidateArticles[idNum - 1];
+        if (cand?.link) resolvedLinks.push(cand.link);
+      }
+    }
+    if (Array.isArray(item.links)) {
+      for (const l of item.links) {
+        if (l && l.startsWith('http')) resolvedLinks.push(l);
+      }
+    }
+    if (resolvedLinks.length === 0 && candidateArticles[0]?.link) {
+      resolvedLinks.push(candidateArticles[0].link);
+    }
+    stories.push({
+      title: item.title,
+      links: [...new Set(resolvedLinks)],
+      pitch: item.pitch,
+    });
+  }
+
+  return stories;
 }
 
 /**
