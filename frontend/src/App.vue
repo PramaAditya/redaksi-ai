@@ -5,8 +5,10 @@ import { useColorMode } from "@vueuse/core";
 import { useConnectionStore } from "./store";
 import { getAuthHeaders } from "./auth";
 import type { NavigationMenuItem } from '@nuxt/ui';
+import McpSetupModal from "./components/McpSetupModal.vue";
 
 const route = useRoute();
+const mcpModalOpen = ref(false);
 const colorMode = useColorMode();
 const toggleColorMode = () => {
   colorMode.value = colorMode.value === "dark" ? "light" : "dark";
@@ -120,6 +122,14 @@ const topNavItems = computed<MainNavItem[]>(() => [
         <template #footer>
           <div class="flex flex-col gap-1 w-full">
             <UButton
+              label="MCP Agent Setup"
+              icon="i-lucide-bot"
+              color="primary"
+              variant="subtle"
+              class="w-full justify-start overflow-hidden cursor-pointer"
+              @click="mcpModalOpen = true"
+            />
+            <UButton
               label="Global Settings"
               icon="i-lucide-globe"
               color="neutral"
@@ -162,6 +172,16 @@ const topNavItems = computed<MainNavItem[]>(() => [
 
           <!-- Quick Actions (Theme & Settings) -->
           <div class="flex items-center gap-1 shrink-0">
+            <UButton
+              icon="i-lucide-bot"
+              color="neutral"
+              variant="ghost"
+              size="sm"
+              aria-label="MCP Agent Setup"
+              title="Connect MCP to AI Agent"
+              class="cursor-pointer"
+              @click="mcpModalOpen = true"
+            />
             <UButton
               to="/global-settings"
               icon="i-lucide-globe"
@@ -237,5 +257,6 @@ const topNavItems = computed<MainNavItem[]>(() => [
         </div>
       </div>
     </div>
+    <McpSetupModal v-model="mcpModalOpen" />
   </UApp>
 </template>

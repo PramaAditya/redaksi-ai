@@ -385,12 +385,126 @@ app.delete('/api/ideas/:id', requireDashboardAuth, async (req, res) => {
 });
 
 app.get('/api/mcp/tools', requireDashboardAuth, (_req, res) => {
-  const tools = REDAKSI_MCP_TOOLS.map((t) => ({
-    name: t.name,
-    label: t.label,
-    description: t.description,
-  }));
+  const tools = REDAKSI_MCP_TOOLS.map((t) => {
+    let inputSchema: any = { type: 'object', properties: {} };
+    try {
+      inputSchema = z.toJSONSchema(t.schema);
+    } catch {}
+    return {
+      name: t.name,
+      label: t.label,
+      description: t.description,
+      inputSchema,
+    };
+  });
   res.json({ count: tools.length, tools });
+});
+
+app.get('/mcp-bridge.mjs', (_req, res) => {
+  const script = `#!/usr/bin/env node
+// Redaksi.AI Zero-Dependency Stdio MCP Bridge (Node.js 18+)
+import readline from 'node:readline';
+
+const API_URL = (process.env.REDAKSI_API_URL || 'https://ignewsbot.rekapancatama.com').replace(/\\/$/, '');
+const API_KEY = process.env.REDAKSI_API_KEY || process.env.DASHBOARD_PASSWORD || '';
+
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+
+function send(msg) {
+  process.stdout.write(JSON.stringify(msg) + '\\n');
+}
+
+rl.on('line', async (line) => {
+  if (!line.trim()) return;
+  let req;
+  try {
+    req = JSON.parse(line);
+  } catch {
+    return;
+  }
+  const { id, method, params } = req;
+  if (id === undefined) return; // Notification
+
+  try {
+    if (method === 'initialize') {
+      return send({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          protocolVersion: params?.protocolVersion || '2024-11-05',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'redaksi-ai', version: '1.0.0' },
+        },
+      });
+    }
+    if (method === 'ping') {
+      return send({ jsonrpc: '2.0', id, result: {} });
+    }
+    if (method === 'tools/list') {
+      const res = await fetch(\`\${API_URL}/api/mcp/tools\`, {
+        headers: { Authorization: \`Bearer \${API_KEY}\` },
+      });
+      if (!res.ok) throw new Error(\`HTTP \${res.status}: \${await res.text()}\`);
+      const data = await res.json();
+      return send({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          tools: (data.tools || []).map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema || { type: 'object', properties: {} },
+          })),
+        },
+      });
+    }
+    if (method === 'tools/call') {
+      const res = await fetch(\`\${API_URL}/api/mcp/call\`, {
+        method: 'POST',
+        headers: {
+          Authorization: \`Bearer \${API_KEY}\`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: params?.name,
+          arguments: params?.arguments || {},
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return send({
+          jsonrpc: '2.0',
+          id,
+          result: {
+            isError: true,
+            content: [{ type: 'text', text: \`Error: \${data.error || res.statusText}\` }],
+          },
+        });
+      }
+      return send({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          content: [{ type: 'text', text: JSON.stringify(data.result, null, 2) }],
+        },
+      });
+    }
+    send({
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32601, message: \`Method not found: \${method}\` },
+    });
+  } catch (err) {
+    send({
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32000, message: err.message || String(err) },
+    });
+  }
+});
+`;
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.send(script);
 });
 
 app.post('/api/mcp/call', requireDashboardAuth, async (req, res) => {
