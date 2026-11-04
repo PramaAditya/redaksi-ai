@@ -123,7 +123,8 @@ async function processNextJob() {
   }
 
   try {
-    const telegramToUse = jobToProcess.chat_id === 'DASHBOARD'
+    const isNumericTelegramChat = /^-?\d+$/.test(String(jobToProcess.chat_id || ''));
+    const telegramToUse = !isNumericTelegramChat
       ? {
           sendMessage: async (chatId: string, text: string, opts: any) => {
             console.log(`[Dashboard Job Status] ${text}`);

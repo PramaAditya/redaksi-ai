@@ -660,7 +660,7 @@ const getPostDropdownItems = (item: any) => {
                 {{ job.status === 'processing' ? 'Generating Carousel...' : job.status === 'pending' ? 'Queued in Worker' : 'Generation Failed' }}
               </span>
               <span class="text-xs text-muted font-mono">
-                #{{ job.id }} · {{ job.chatId === 'DASHBOARD' ? 'Web CMS' : job.chatId === 'OMP_EXTENSION' ? 'OMP Agent' : 'Telegram' }}
+                #{{ job.id }} · {{ job.chatId === 'DASHBOARD' ? 'Web CMS' : job.chatId === 'NEWS_RADAR' ? 'News Radar' : job.chatId === 'OMP_EXTENSION' ? 'OMP Agent' : 'Telegram' }}
               </span>
               <span class="text-xs text-muted">· {{ timeAgo(job.createdAt) }}</span>
             </div>

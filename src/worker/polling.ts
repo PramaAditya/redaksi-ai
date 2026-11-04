@@ -55,12 +55,10 @@ export async function pollBufferingPosts(options: PollBufferingOptions = {}) {
             })
             .where(eq(queueTable.id, post.id));
 
-          const targetChatId = (post.chatId && post.chatId !== 'DASHBOARD')
-            ? post.chatId
-            : adminChatId;
+          const isDirectReply = Boolean(post.chatId && /^-?\d+$/.test(String(post.chatId)));
+          const targetChatId = isDirectReply ? post.chatId : adminChatId;
 
           if (telegram && targetChatId) {
-            const isDirectReply = post.chatId && post.chatId !== 'DASHBOARD';
             const titleSnippet = post.text
               ? post.text.split('\n')[0].replace(/[*#_`]/g, '').slice(0, 100)
               : 'Postingan Baru';
@@ -118,12 +116,10 @@ export async function pollBufferingPosts(options: PollBufferingOptions = {}) {
               })
               .where(eq(queueTable.id, post.id));
 
-            const targetChatId = (post.chatId && post.chatId !== 'DASHBOARD')
-              ? post.chatId
-              : adminChatId;
+            const isDirectReply = Boolean(post.chatId && /^-?\d+$/.test(String(post.chatId)));
+            const targetChatId = isDirectReply ? post.chatId : adminChatId;
 
             if (telegram && targetChatId) {
-              const isDirectReply = post.chatId && post.chatId !== 'DASHBOARD';
               const errorMessage = `❌ <b>Postingan Gagal Terbit di Instagram</b>\n\nAlasan: ${statusResult.message || 'Persistent media upload failure'}`;
               try {
                 await telegram.sendMessage(targetChatId, errorMessage, {

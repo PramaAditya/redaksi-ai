@@ -567,7 +567,7 @@ app.post('/api/ideas/:id/convert', requireDashboardAuth, async (req, res) => {
 
     await db.insert(jobsTable).values({
       connectionId: idea.connectionId,
-      chatId: idea.chatId || 'DASHBOARD',
+      chatId: idea.chatId && /^-?\d+$/.test(String(idea.chatId)) ? idea.chatId : 'DASHBOARD',
       messageId: idea.messageId,
       text: idea.text,
       media: idea.media,
